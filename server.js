@@ -16,7 +16,7 @@ const {
   DB_PASSWORD = "",
   EVOLUTION_URL = "http://evolution-api:8080",
   EVOLUTION_APIKEY = "",
-  EVOLUTION_INSTANCE = "cs-test",
+  EVOLUTION_INSTANCE = "cs-pako",
   WEBHOOK_TOKEN = "",          // opsional: proteksi endpoint webhook
   UI_USER = "",                 // opsional: Basic Auth utk UI
   UI_PASS = "",
