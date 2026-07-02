@@ -97,11 +97,13 @@
   .fbc-ok{color:var(--green);font-weight:700}
   .fbc-no{color:var(--text-2);font-weight:700}
   .signal-btns{display:flex;flex-direction:column;gap:8px}
-  .sig{display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:10px;cursor:not-allowed;border:1px solid transparent;font-weight:600;font-size:14px;opacity:.6}
+  .sig{display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:10px;cursor:pointer;border:1px solid transparent;font-weight:600;font-size:14px;opacity:1}
+  .sig:hover{filter:brightness(0.92)}
+  .sig.loading{cursor:wait;opacity:.6;pointer-events:none}
   .sig .ico{font-size:17px}
   .sig-warm{background:var(--orange-soft);color:var(--orange);border-color:#F0CDA8}
   .sig-hot{background:var(--red-soft);color:var(--red);border-color:#F3BEB8}
-  .sig-pay{background:var(--green);color:#fff;opacity:.6}
+  .sig-pay{background:var(--green);color:#fff}
   .sig .arrow{margin-left:auto;opacity:.6}
   .log{list-style:none;display:flex;flex-direction:column;gap:9px}
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;font-size:13px;padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
@@ -181,9 +183,9 @@
         <div class="card">
           <h3>Kirim Sinyal ke Meta <span class="soon">Fase 1</span></h3>
           <div class="signal-btns">
-            <div class="sig sig-warm" data-soon="1"><span class="ico">🌤️</span> Tandai Warm — tertarik <span class="arrow">›</span></div>
-            <div class="sig sig-hot" data-soon="1"><span class="ico">🔥</span> Tandai Hot — mau beli <span class="arrow">›</span></div>
-            <div class="sig sig-pay" data-soon="1"><span class="ico">💰</span> Konfirmasi Bayar (DP) <span class="arrow">›</span></div>
+            <div class="sig sig-warm" onclick="sendSignal('warm')"><span class="ico">🌤️</span> Tandai Warm — tertarik <span class="arrow">›</span></div>
+            <div class="sig sig-hot" onclick="sendSignal('hot')"><span class="ico">🔥</span> Tandai Hot — mau beli <span class="arrow">›</span></div>
+            <div class="sig sig-pay" onclick="openPurchaseModal()"><span class="ico">💰</span> Konfirmasi Bayar (DP) <span class="arrow">›</span></div>
           </div>
         </div>
 
@@ -199,9 +201,48 @@
 
         <div class="card">
           <h3>Log Sinyal CAPI <span class="soon">Fase 1</span></h3>
-          <div class="muted" id="log-body">Belum ada sinyal terkirim. Riwayat event (Lead / Purchase) akan tampil di sini mulai Fase 1.</div>
+          <ul class="log" id="log-box"><li class="muted">Belum ada sinyal terkirim. Riwayat event (Lead / Purchase) akan tampil di sini mulai Fase 1.</li></ul>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+<div id="modal-pay" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(30,28,26,0.45);align-items:center;justify-content:center">
+  <div style="width:380px;background:#fff;border-radius:16px;padding:24px;box-shadow:0 12px 40px rgba(0,0,0,.2)">
+    <h2 style="font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:4px">💰 Konfirmasi Pembayaran</h2>
+    <p style="font-size:13px;color:var(--text-2);margin-bottom:18px">Kirim event <b>Purchase</b> ke Meta untuk <span id="modal-nama">—</span>.</p>
+
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Nilai order (Rp) — boleh dikosongkan</label>
+      <div style="display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <span style="padding:10px 12px;background:var(--soft);color:var(--text-2);font-size:14px;font-weight:600;border-right:1px solid var(--border)">Rp</span>
+        <input id="modal-nilai" type="number" min="0" placeholder="Contoh: 28500000"
+          style="flex:1;padding:10px 12px;border:none;font-size:14px;outline:none" />
+      </div>
+      <div style="font-size:11.5px;color:var(--text-2);margin-top:4px">Kosongkan bila hanya ingin kirim event tanpa nilai.</div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Status pembayaran</label>
+      <div style="display:flex;gap:8px" id="modal-status-row">
+        <div id="modal-dp" onclick="selectStatus('dp')"
+          style="flex:1;padding:9px;text-align:center;border-radius:8px;border:2px solid var(--green);background:var(--green-soft);color:var(--green);font-weight:700;cursor:pointer;font-size:13.5px">DP</div>
+        <div id="modal-lunas" onclick="selectStatus('lunas')"
+          style="flex:1;padding:9px;text-align:center;border-radius:8px;border:2px solid var(--border);color:var(--text-2);font-weight:600;cursor:pointer;font-size:13.5px">Lunas</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:20px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Catatan (opsional)</label>
+      <textarea id="modal-catatan" rows="2" placeholder="Mis. DP via BSI, transfer 19:50"
+        style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;resize:none;outline:none"></textarea>
+    </div>
+
+    <div style="display:flex;gap:10px">
+      <button onclick="closePayModal()"
+        style="flex:1;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--canvas);font-size:14px;font-weight:600;cursor:pointer">Batal</button>
+      <button id="modal-submit" onclick="submitPurchase()"
+        style="flex:2;padding:11px;border:none;border-radius:8px;background:var(--green);color:#fff;font-size:14px;font-weight:700;cursor:pointer">Kirim Purchase ke Meta →</button>
     </div>
   </div>
 </div>
@@ -312,6 +353,7 @@ async function openChat(id){
   $("#i-fbc").innerHTML=c.fbc?'<span class="fbc-ok">● Terhubung</span>':'<span class="fbc-no">○ Tidak ada</span>';
   $("#i-first").textContent=c.first||"—";
   await loadMessages(id);
+  await loadSignals(id);
 }
 
 async function loadMessages(id){
@@ -338,6 +380,127 @@ async function send(){
   }
   try{await api("/api/chats/"+state.active+"/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});await loadMessages(state.active)}
   catch(e){toast("Gagal mengirim: "+e.message)}
+}
+
+async function sendSignal(kualitas) {
+  if (!state.active) return;
+  const btn = document.querySelector(`.sig-${kualitas}`);
+  if (btn) btn.classList.add('loading');
+  try {
+    const r = await api('/api/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kontak_id: state.active, kualitas })
+    });
+    // Update status lead di daftar chat lokal
+    const chat = state.chats.find(c => c.id === state.active);
+    if (chat) { chat.status_lead = kualitas; renderList(); }
+    // Update badge di header percakapan
+    const col = LEADCOLOR[kualitas] || '#B5B2AD';
+    $('#c-avatar').style.background = col;
+    toast(kualitas === 'warm' ? '🌤️ Sinyal Warm terkirim ke Meta!' : '🔥 Sinyal Hot terkirim ke Meta!');
+    await loadSignals(state.active);
+  } catch(e) {
+    toast('Gagal kirim sinyal: ' + e.message);
+  } finally {
+    if (btn) btn.classList.remove('loading');
+  }
+}
+
+let modalStatus = 'dp';
+
+function selectStatus(s) {
+  modalStatus = s;
+  const dp = document.getElementById('modal-dp');
+  const lunas = document.getElementById('modal-lunas');
+  if (s === 'dp') {
+    dp.style.borderColor = 'var(--green)'; dp.style.background = 'var(--green-soft)'; dp.style.color = 'var(--green)';
+    lunas.style.borderColor = 'var(--border)'; lunas.style.background = ''; lunas.style.color = 'var(--text-2)';
+  } else {
+    lunas.style.borderColor = 'var(--blue)'; lunas.style.background = 'var(--blue-soft)'; lunas.style.color = 'var(--blue)';
+    dp.style.borderColor = 'var(--border)'; dp.style.background = ''; dp.style.color = 'var(--text-2)';
+  }
+}
+
+function openPurchaseModal() {
+  if (!state.active) return;
+  const chat = state.chats.find(c => c.id === state.active);
+  document.getElementById('modal-nama').textContent = chat ? (chat.nama || chat.no_hp) : '—';
+  document.getElementById('modal-nilai').value = '';
+  document.getElementById('modal-catatan').value = '';
+  selectStatus('dp');
+  const modal = document.getElementById('modal-pay');
+  modal.style.display = 'flex';
+}
+
+function closePayModal() {
+  document.getElementById('modal-pay').style.display = 'none';
+}
+
+async function submitPurchase() {
+  const nilai = document.getElementById('modal-nilai').value;
+  const catatan = document.getElementById('modal-catatan').value;
+  const btn = document.getElementById('modal-submit');
+  btn.textContent = 'Mengirim…'; btn.disabled = true;
+  try {
+    await api('/api/purchase', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kontak_id: state.active,
+        nilai_order: nilai ? Number(nilai) : null,
+        status: modalStatus,
+        catatan: catatan || null
+      })
+    });
+    const nilaiText = nilai ? ' (Rp ' + Number(nilai).toLocaleString('id-ID') + ')' : '';
+    closePayModal();
+    toast('💰 Purchase terkirim ke Meta!' + nilaiText);
+    await loadSignals(state.active);
+  } catch(e) {
+    toast('Gagal kirim Purchase: ' + e.message);
+  } finally {
+    btn.textContent = 'Kirim Purchase ke Meta →'; btn.disabled = false;
+  }
+}
+
+// Tutup modal kalau klik di luar kotak
+document.getElementById('modal-pay').addEventListener('click', function(e) {
+  if (e.target === this) closePayModal();
+});
+
+async function loadSignals(kontakId) {
+  const box = $('#log-box');
+  if (!box) return;
+  if (state.demo) {
+    box.innerHTML = '<li style="color:var(--text-2);font-size:12px">Mode demo — log tidak tersedia</li>';
+    return;
+  }
+  try {
+    const logs = await api('/api/signals/' + kontakId);
+    if (!logs.length) {
+      box.innerHTML = '<li style="color:var(--text-2);font-size:12px">Belum ada sinyal terkirim.</li>';
+      return;
+    }
+    box.innerHTML = logs.map(l => {
+      const icon = l.jenis === 'Purchase' ? '💰' : l.kualitas === 'hot' ? '🔥' : '🌤️';
+      const label = l.jenis === 'Purchase'
+        ? `Purchase${l.nilai_order ? ' Rp ' + Number(l.nilai_order).toLocaleString('id-ID') : ''}`
+        : `Lead ${l.kualitas}`;
+      const statusColor = l.status === 'terkirim' ? 'var(--green)' : 'var(--red)';
+      return `<li style="font-size:12.5px;display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed var(--soft-2)">
+        <span>${icon}</span>
+        <span style="flex:1">
+          <strong>${label}</strong>
+          <span style="color:${statusColor};margin-left:6px">${l.status === 'terkirim' ? '✓ Terkirim' : '✗ Gagal'}</span>
+          <br><span style="color:var(--text-2);font-size:11px">${l.waktu}</span>
+          ${l.pesan_error ? `<br><span style="color:var(--red);font-size:11px">${l.pesan_error}</span>` : ''}
+        </span>
+      </li>`;
+    }).join('');
+  } catch(e) {
+    box.innerHTML = '<li style="color:var(--red);font-size:12px">Gagal load log.</li>';
+  }
 }
 
 $("#filters").addEventListener("click",e=>{const c=e.target.closest(".chip");if(!c)return;[...document.querySelectorAll(".chip")].forEach(x=>x.classList.remove("active"));c.classList.add("active");state.filter=c.dataset.f;renderList()});

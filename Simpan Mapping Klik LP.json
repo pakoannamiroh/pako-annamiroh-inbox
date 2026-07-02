@@ -1,0 +1,183 @@
+{
+  "name": "Simpan Mapping Klik LP",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "simpan-klik",
+        "options": {
+          "responseCode": {
+            "values": {}
+          },
+          "responseData": "{\"status\":\"ok\"}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://namirohpako.pages.dev"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        256,
+        416
+      ],
+      "webhookId": "37997b99-d556-4086-bb7f-8b24000683a3"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO mapping_klik (kode, fbc, fbp, utm_source, utm_campaign, halaman, waktu) VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) ON CONFLICT (kode) DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.kode, $json.body.fbc, $json.body.fbp, $json.body.utm_source, $json.body.utm_campaign, $json.body.halaman, $json.body.waktu] }}"
+        }
+      },
+      "id": "postgres-exec",
+      "name": "Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        480,
+        416
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WoiEPb8i9NOgAocW",
+          "name": "Annamiroh App DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v20.0/27189018400754648/events",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "EAAN0P4e4ZBdYBRhOjRYLc417jjxvSLRGDTlRWz3WNKuJX5EAZBSAPHFtgZAsdNZBvILtrct9OkLKnO5kOhm1ADHWiohupghs65nNZAU652GBMInhCv4LAod9P1dvFSA6ZCEb33aZCwcZCH04c9psHFM4HPR2f7dhrzXEtsByIxxRZCqZAeCFNIuv11ukZBLXZAqRXvy3MQZDZD"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"test_event_code\": \"TEST22615\",\n  \"data\": [\n    {\n      \"event_name\": \"Purchase\",\n      \"event_time\":  Math.floor($now.toSeconds()) ,\n      \"action_source\": \"website\",\n      \"event_source_url\": \"https://annamiroh-pako.netlify.app/\",\n      \"event_id\": \"purchase_test_ Math.floor($now.toSeconds()) \",\n      \"user_data\": {\n        \"client_user_agent\": \"n8n-meta-capi/1.0\"\n      },\n      \"custom_data\": {\n        \"currency\": \"IDR\",\n        \"value\":  $json.body && $json.body.value ? $json.body.value : 1000000 \n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        112
+      ],
+      "id": "86629e75-2bc1-406a-9eb2-33db0071b99f",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meta-capi-purchase-test",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        272,
+        112
+      ],
+      "id": "459e4f40-bed1-4104-a758-e3f99f3e5b4c",
+      "name": "Webhook1",
+      "webhookId": "e7cafe47-6133-4acd-8e49-49cafd8e0703"
+    },
+    {
+      "parameters": {
+        "content": "## Meta CAPI Purchase",
+        "height": 256,
+        "width": 576,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        144,
+        32
+      ],
+      "typeVersion": 1,
+      "id": "f577cf26-9d43-47ca-bf0d-56e6146048ca",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Simpan Mapping Klik LP",
+        "height": 256,
+        "width": 576,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        144,
+        320
+      ],
+      "typeVersion": 1,
+      "id": "c872d0e6-18cb-43d5-9fc3-125c001a2377",
+      "name": "Sticky Note1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "versionId": "0806f3ed-39fd-4683-9742-c5a4d8012dcc",
+  "meta": {
+    "instanceId": "a603a88bf7a88eea5f1742914102abcb8f6fbfbcffaa7ee5cefd238ee155a612"
+  },
+  "nodeGroups": [],
+  "id": "Er3SFo2ZpdwdjPSH",
+  "tags": []
+}
