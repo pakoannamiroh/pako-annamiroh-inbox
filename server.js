@@ -136,6 +136,8 @@ async function migrate() {
       jenis TEXT,
       kualitas TEXT,
       nilai_order NUMERIC,
+      status_bayar TEXT,
+      catatan TEXT,
       event_id TEXT,
       status TEXT,
       pesan_error TEXT,
@@ -154,6 +156,7 @@ async function migrate() {
     percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
       "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
     log_event: ["kontak_id INTEGER","jenis TEXT","kualitas TEXT","nilai_order NUMERIC",
+      "status_bayar TEXT","catatan TEXT",
       "event_id TEXT","status TEXT","pesan_error TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
   };
   for (const [tbl, defs] of Object.entries(cols))
@@ -321,7 +324,7 @@ app.post("/api/signal", async (req, res) => {
 // --- Fase 1: Kirim event Purchase ke Meta CAPI ---
 app.post("/api/purchase", async (req, res) => {
   try {
-    const { kontak_id, nilai_order } = req.body || {};
+    const { kontak_id, nilai_order, status, catatan } = req.body || {};
     if (!kontak_id) return res.status(400).json({ error: "kontak_id wajib diisi" });
     const { rows } = await pool.query("SELECT * FROM kontak WHERE id=$1", [kontak_id]);
     if (!rows.length) return res.status(404).json({ error: "kontak tidak ditemukan" });
@@ -334,8 +337,8 @@ app.post("/api/purchase", async (req, res) => {
       capiResult = await sendCapiEvent({ eventName: "Purchase", eventId, no_hp: k.no_hp, nama: k.nama, fbc: k.fbc, fbp: k.fbp, customData });
     } catch (e) { capiError = e.message; }
     await pool.query(
-      "INSERT INTO log_event (kontak_id, jenis, nilai_order, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5)",
-      [kontak_id, nilai_order || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+      "INSERT INTO log_event (kontak_id, jenis, nilai_order, status_bayar, catatan, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5,$6,$7)",
+      [kontak_id, nilai_order || null, status || null, catatan || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
     );
     if (capiError) return res.json({ ok: false, error: capiError });
     res.json({ ok: true, events_received: capiResult?.events_received });
