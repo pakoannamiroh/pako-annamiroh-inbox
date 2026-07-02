@@ -6,6 +6,7 @@
 const express = require("express");
 const path = require("path");
 const { Pool } = require("pg");
+const crypto = require("crypto");
 
 const {
   PORT = 3100,
@@ -20,6 +21,9 @@ const {
   WEBHOOK_TOKEN = "",          // opsional: proteksi endpoint webhook
   UI_USER = "",                 // opsional: Basic Auth utk UI
   UI_PASS = "",
+  CAPI_TOKEN = "",              // Token Meta Conversions API
+  CAPI_DATASET_ID = "",         // ID Dataset Meta Pixel
+  CAPI_TEST_CODE = "",          // Test event code (isi saat uji, kosongkan di produksi)
 } = process.env;
 
 const pool = new Pool({
@@ -53,6 +57,51 @@ const fmtTime = d => d ? new Date(d).toLocaleString("id-ID",
 const fmtClock = d => d ? new Date(d).toLocaleTimeString("id-ID",
   { hour:"2-digit", minute:"2-digit", timeZone:"Asia/Jakarta" }) : "";
 
+// Helper: hash SHA256
+function sha256(val) {
+  if (!val) return undefined;
+  return crypto.createHash("sha256").update(String(val).trim().toLowerCase()).digest("hex");
+}
+
+// Helper: normalisasi nomor HP ke E.164 lalu hash
+function hashPhone(no_hp) {
+  const digits = String(no_hp || "").replace(/\D/g, "");
+  if (!digits) return undefined;
+  const e164 = digits.startsWith("0") ? "62" + digits.slice(1) : digits;
+  return sha256(e164);
+}
+
+// Helper: kirim event ke Meta Conversions API
+async function sendCapiEvent({ eventName, eventId, no_hp, nama, fbc, fbp, customData }) {
+  if (!CAPI_TOKEN || !CAPI_DATASET_ID) throw new Error("CAPI_TOKEN atau CAPI_DATASET_ID belum diisi di .env");
+  const parts = (nama || "").trim().split(/\s+/);
+  const userData = {
+    ph: hashPhone(no_hp) ? [hashPhone(no_hp)] : undefined,
+    fn: sha256(parts[0]),
+    ln: parts.length > 1 ? sha256(parts.slice(1).join(" ")) : undefined,
+    fbc: fbc || undefined,
+    fbp: fbp || undefined,
+  };
+  Object.keys(userData).forEach(k => userData[k] === undefined && delete userData[k]);
+  const payload = {
+    data: [{
+      event_name: eventName,
+      event_time: Math.floor(Date.now() / 1000),
+      event_id: eventId,
+      action_source: "website",
+      user_data: userData,
+      custom_data: customData || {},
+    }],
+    access_token: CAPI_TOKEN,
+  };
+  if (CAPI_TEST_CODE) payload.test_event_code = CAPI_TEST_CODE;
+  const url = `https://graph.facebook.com/v20.0/${CAPI_DATASET_ID}/events`;
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const result = await r.json();
+  if (!r.ok || result.error) throw new Error(JSON.stringify(result.error || result));
+  return result;
+}
+
 // ---------- Migrasi idempoten (aman dijalankan berulang) ----------
 async function migrate() {
   await pool.query(`
@@ -81,6 +130,17 @@ async function migrate() {
       wa_message_id TEXT,
       waktu TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS log_event (
+      id SERIAL PRIMARY KEY,
+      kontak_id INTEGER REFERENCES kontak(id) ON DELETE CASCADE,
+      jenis TEXT,
+      kualitas TEXT,
+      nilai_order NUMERIC,
+      event_id TEXT,
+      status TEXT,
+      pesan_error TEXT,
+      waktu TIMESTAMPTZ DEFAULT now()
+    );
     CREATE INDEX IF NOT EXISTS idx_percakapan_kontak ON percakapan(kontak_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_percakapan_waid
       ON percakapan(wa_message_id) WHERE wa_message_id IS NOT NULL;
@@ -93,6 +153,8 @@ async function migrate() {
       "dibuat TIMESTAMPTZ DEFAULT now()","diperbarui TIMESTAMPTZ DEFAULT now()"],
     percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
       "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
+    log_event: ["kontak_id INTEGER","jenis TEXT","kualitas TEXT","nilai_order NUMERIC",
+      "event_id TEXT","status TEXT","pesan_error TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
   };
   for (const [tbl, defs] of Object.entries(cols))
     for (const d of defs)
@@ -189,7 +251,7 @@ app.get("/api/chats", async (_req, res) => {
     res.json(rows.map(r => ({
       id: r.id, nama: r.nama, no_hp: r.no_hp, status_lead: r.status_lead,
       skor_lead: r.skor_lead, ai_aktif: r.ai_aktif !== false,
-      sumber_iklan: r.sumber_iklan, fbc: r.fbc, kode: r.kode,
+      sumber_iklan: r.sumber_iklan, fbc: r.fbc, fbp: r.fbp, kode: r.kode,
       last: r.last, last_time: fmtClock(r.last_waktu),
       first: fmtTime(r.dibuat),
     })));
@@ -228,6 +290,78 @@ app.post("/api/chats/:id/send", async (req, res) => {
       `INSERT INTO percakapan (kontak_id, jid, arah, pesan, tipe, wa_message_id)
        VALUES ($1,$2,'keluar',$3,'text',$4)`,
       [kontak.id, kontak.jid, text, sent?.key?.id || null]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Fase 1: Kirim sinyal Lead Warm/Hot ke Meta CAPI ---
+app.post("/api/signal", async (req, res) => {
+  try {
+    const { kontak_id, kualitas } = req.body || {};
+    if (!kontak_id || !["warm","hot"].includes(kualitas))
+      return res.status(400).json({ error: "kontak_id dan kualitas (warm/hot) wajib diisi" });
+    const { rows } = await pool.query("SELECT * FROM kontak WHERE id=$1", [kontak_id]);
+    if (!rows.length) return res.status(404).json({ error: "kontak tidak ditemukan" });
+    const k = rows[0];
+    const eventId = `lead-${kontak_id}-${kualitas}-${Date.now()}`;
+    let capiResult = null, capiError = null;
+    try {
+      capiResult = await sendCapiEvent({ eventName: "Lead", eventId, no_hp: k.no_hp, nama: k.nama, fbc: k.fbc, fbp: k.fbp, customData: { lead_quality: kualitas } });
+    } catch (e) { capiError = e.message; }
+    await pool.query("UPDATE kontak SET status_lead=$1, diperbarui=now() WHERE id=$2", [kualitas, kontak_id]);
+    await pool.query(
+      "INSERT INTO log_event (kontak_id, jenis, kualitas, event_id, status, pesan_error) VALUES ($1,'Lead',$2,$3,$4,$5)",
+      [kontak_id, kualitas, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+    );
+    if (capiError) return res.json({ ok: false, error: capiError });
+    res.json({ ok: true, events_received: capiResult?.events_received });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Fase 1: Kirim event Purchase ke Meta CAPI ---
+app.post("/api/purchase", async (req, res) => {
+  try {
+    const { kontak_id, nilai_order } = req.body || {};
+    if (!kontak_id) return res.status(400).json({ error: "kontak_id wajib diisi" });
+    const { rows } = await pool.query("SELECT * FROM kontak WHERE id=$1", [kontak_id]);
+    if (!rows.length) return res.status(404).json({ error: "kontak tidak ditemukan" });
+    const k = rows[0];
+    const eventId = `purchase-${kontak_id}-${Date.now()}`;
+    const customData = { currency: "IDR" };
+    if (nilai_order && Number(nilai_order) > 0) customData.value = Number(nilai_order);
+    let capiResult = null, capiError = null;
+    try {
+      capiResult = await sendCapiEvent({ eventName: "Purchase", eventId, no_hp: k.no_hp, nama: k.nama, fbc: k.fbc, fbp: k.fbp, customData });
+    } catch (e) { capiError = e.message; }
+    await pool.query(
+      "INSERT INTO log_event (kontak_id, jenis, nilai_order, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5)",
+      [kontak_id, nilai_order || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+    );
+    if (capiError) return res.json({ ok: false, error: capiError });
+    res.json({ ok: true, events_received: capiResult?.events_received });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Fase 1: Ambil log sinyal CAPI per kontak ---
+app.get("/api/signals/:kontakId", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM log_event WHERE kontak_id=$1 ORDER BY waktu DESC LIMIT 20",
+      [req.params.kontakId]
+    );
+    res.json(rows.map(r => ({
+      id: r.id, jenis: r.jenis, kualitas: r.kualitas,
+      nilai_order: r.nilai_order, status: r.status,
+      pesan_error: r.pesan_error, waktu: fmtTime(r.waktu),
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Fase 1: Update status lead manual ---
+app.patch("/api/chats/:id/lead", async (req, res) => {
+  try {
+    const { status_lead } = req.body || {};
+    await pool.query("UPDATE kontak SET status_lead=$1, diperbarui=now() WHERE id=$2", [status_lead || null, req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
