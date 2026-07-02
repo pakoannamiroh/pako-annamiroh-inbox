@@ -1,0 +1,240 @@
+// Pako An Namiroh - Inbox  (Fase 0.5)
+// Backend minimal: ingest pesan WhatsApp dari Evolution API, simpan ke Postgres
+// (DB annamiroh), cocokkan kode unik -> ambil fbc/fbp/utm dari mapping_klik,
+// dan layani UI inbox (daftar chat, detail chat, kirim balasan).
+
+const express = require("express");
+const path = require("path");
+const { Pool } = require("pg");
+
+const {
+  PORT = 3100,
+  DB_HOST = "postgres",
+  DB_PORT = 5432,
+  DB_NAME = "annamiroh",
+  DB_USER = "annamiroh_app",
+  DB_PASSWORD = "",
+  EVOLUTION_URL = "http://evolution-api:8080",
+  EVOLUTION_APIKEY = "",
+  EVOLUTION_INSTANCE = "cs-test",
+  WEBHOOK_TOKEN = "",          // opsional: proteksi endpoint webhook
+  UI_USER = "",                 // opsional: Basic Auth utk UI
+  UI_PASS = "",
+} = process.env;
+
+const pool = new Pool({
+  host: DB_HOST, port: Number(DB_PORT), database: DB_NAME,
+  user: DB_USER, password: DB_PASSWORD, max: 5,
+});
+
+const app = express();
+app.use(express.json({ limit: "2mb" }));
+
+// ---- Basic Auth opsional untuk UI & API (single-user Owner) ----
+app.use((req, res, next) => {
+  if (!UI_USER) return next();                       // auth dimatikan
+  if (req.path.startsWith("/webhook")) return next(); // webhook pakai token sendiri
+  const h = req.headers.authorization || "";
+  const [u, p] = Buffer.from(h.split(" ")[1] || "", "base64").toString().split(":");
+  if (u === UI_USER && p === UI_PASS) return next();
+  res.set("WWW-Authenticate", 'Basic realm="Inbox"').status(401).send("Auth diperlukan");
+});
+
+// ---------- Helper ----------
+const onlyDigits = s => String(s || "").replace(/\D/g, "");
+const jidToPhone = jid => onlyDigits(String(jid || "").split("@")[0]);
+function extractKode(text) {
+  if (!text) return null;
+  const m = String(text).match(/kode[\s:#-]*([A-Za-z0-9]{3,12})/i);
+  return m ? m[1].toUpperCase() : null;
+}
+const fmtTime = d => d ? new Date(d).toLocaleString("id-ID",
+  { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Jakarta" }) : "";
+const fmtClock = d => d ? new Date(d).toLocaleTimeString("id-ID",
+  { hour:"2-digit", minute:"2-digit", timeZone:"Asia/Jakarta" }) : "";
+
+// ---------- Migrasi idempoten (aman dijalankan berulang) ----------
+async function migrate() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kontak (
+      id SERIAL PRIMARY KEY,
+      jid TEXT UNIQUE,
+      no_hp TEXT,
+      nama TEXT,
+      status_lead TEXT,
+      skor_lead INTEGER,
+      sumber_iklan TEXT,
+      fbc TEXT, fbp TEXT,
+      utm_source TEXT, utm_campaign TEXT,
+      kode TEXT,
+      ai_aktif BOOLEAN DEFAULT true,
+      dibuat TIMESTAMPTZ DEFAULT now(),
+      diperbarui TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS percakapan (
+      id SERIAL PRIMARY KEY,
+      kontak_id INTEGER REFERENCES kontak(id) ON DELETE CASCADE,
+      jid TEXT,
+      arah TEXT,               -- 'masuk' | 'keluar'
+      pesan TEXT,
+      tipe TEXT DEFAULT 'text',
+      wa_message_id TEXT,
+      waktu TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_percakapan_kontak ON percakapan(kontak_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_percakapan_waid
+      ON percakapan(wa_message_id) WHERE wa_message_id IS NOT NULL;
+  `);
+  // Guard kolom (kalau tabel sudah ada versi lama)
+  const cols = {
+    kontak: ["jid TEXT","no_hp TEXT","nama TEXT","status_lead TEXT","skor_lead INTEGER",
+      "sumber_iklan TEXT","fbc TEXT","fbp TEXT","utm_source TEXT","utm_campaign TEXT",
+      "kode TEXT","ai_aktif BOOLEAN DEFAULT true",
+      "dibuat TIMESTAMPTZ DEFAULT now()","diperbarui TIMESTAMPTZ DEFAULT now()"],
+    percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
+      "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
+  };
+  for (const [tbl, defs] of Object.entries(cols))
+    for (const d of defs)
+      await pool.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${d}`);
+  console.log("[migrate] tabel kontak & percakapan siap");
+}
+
+// ---------- Upsert kontak + pencocokan kode -> fbc ----------
+async function upsertKontak(jid, nama) {
+  const phone = jidToPhone(jid);
+  const { rows } = await pool.query(
+    `INSERT INTO kontak (jid, no_hp, nama)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (jid) DO UPDATE SET
+       nama = COALESCE(NULLIF(EXCLUDED.nama,''), kontak.nama),
+       diperbarui = now()
+     RETURNING *`, [jid, phone, nama || null]);
+  return rows[0];
+}
+
+async function cocokkanKode(kontak, teks) {
+  if (kontak.fbc) return kontak;               // sudah punya fbc, lewati
+  const kode = extractKode(teks);
+  if (!kode) return kontak;
+  const { rows } = await pool.query(
+    `SELECT * FROM mapping_klik WHERE kode = $1 ORDER BY waktu DESC LIMIT 1`, [kode]
+  ).catch(() => ({ rows: [] }));
+  if (!rows.length) {
+    await pool.query(`UPDATE kontak SET kode=$1, diperbarui=now() WHERE id=$2`, [kode, kontak.id]);
+    return { ...kontak, kode };
+  }
+  const m = rows[0];
+  const src = m.utm_source ? `${m.utm_source}${m.utm_campaign ? " - " + m.utm_campaign : ""}` : kontak.sumber_iklan;
+  const { rows: up } = await pool.query(
+    `UPDATE kontak SET kode=$1, fbc=$2, fbp=$3, utm_source=$4, utm_campaign=$5,
+       sumber_iklan=COALESCE($6, sumber_iklan), diperbarui=now()
+     WHERE id=$7 RETURNING *`,
+    [kode, m.fbc || null, m.fbp || null, m.utm_source || null, m.utm_campaign || null, src, kontak.id]);
+  console.log(`[kode] ${kode} -> fbc ${m.fbc ? "OK" : "kosong"} utk kontak ${kontak.id}`);
+  return up[0];
+}
+
+// ---------- Webhook Evolution: MESSAGES_UPSERT ----------
+app.post("/webhook/wa-masuk", async (req, res) => {
+  try {
+    if (WEBHOOK_TOKEN && req.query.token !== WEBHOOK_TOKEN) return res.status(401).end();
+    const b = req.body || {};
+    const data = b.data || {};
+    const jid = data.key?.remoteJid;
+    if (!jid || jid.endsWith("@g.us")) return res.json({ ok: true, skip: "grup/kosong" });
+    const fromMe = !!data.key?.fromMe;
+    const teks = data.message?.conversation
+      || data.message?.extendedTextMessage?.text
+      || data.message?.imageMessage?.caption || "";
+    const tipe = data.message?.conversation || data.message?.extendedTextMessage ? "text"
+      : data.message?.imageMessage ? "image" : "other";
+
+    const waId = data.key?.id || null;
+    // Dedup: pesan yang kita kirim sendiri lewat API sudah tersimpan; Evolution
+    // ikut mengirim balik event yang sama (fromMe) -> jangan simpan dua kali.
+    if (waId) {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM percakapan WHERE wa_message_id=$1 LIMIT 1`, [waId]);
+      if (rows.length) return res.json({ ok: true, dup: true });
+    }
+
+    let kontak = await upsertKontak(jid, data.pushName);
+    if (!fromMe) kontak = await cocokkanKode(kontak, teks);
+
+    await pool.query(
+      `INSERT INTO percakapan (kontak_id, jid, arah, pesan, tipe, wa_message_id)
+       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+      [kontak.id, jid, fromMe ? "keluar" : "masuk", teks, tipe, waId]);
+
+    res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc });
+  } catch (e) {
+    console.error("[webhook]", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ---------- API untuk UI ----------
+app.get("/api/chats", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT k.*,
+        p.pesan AS last, p.waktu AS last_waktu
+      FROM kontak k
+      LEFT JOIN LATERAL (
+        SELECT pesan, waktu FROM percakapan WHERE kontak_id = k.id
+        ORDER BY waktu DESC LIMIT 1
+      ) p ON true
+      ORDER BY COALESCE(p.waktu, k.diperbarui) DESC`);
+    res.json(rows.map(r => ({
+      id: r.id, nama: r.nama, no_hp: r.no_hp, status_lead: r.status_lead,
+      skor_lead: r.skor_lead, ai_aktif: r.ai_aktif !== false,
+      sumber_iklan: r.sumber_iklan, fbc: r.fbc, kode: r.kode,
+      last: r.last, last_time: fmtClock(r.last_waktu),
+      first: fmtTime(r.dibuat),
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/chats/:id/messages", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT arah, pesan, waktu FROM percakapan WHERE kontak_id=$1 ORDER BY waktu ASC LIMIT 500`,
+      [req.params.id]);
+    res.json(rows.map(r => ({ arah: r.arah, pesan: r.pesan, t: fmtClock(r.waktu) })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/chats/:id/send", async (req, res) => {
+  try {
+    const text = (req.body?.text || "").trim();
+    if (!text) return res.status(400).json({ error: "teks kosong" });
+    const { rows } = await pool.query(`SELECT * FROM kontak WHERE id=$1`, [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "kontak tidak ada" });
+    const kontak = rows[0];
+    const number = jidToPhone(kontak.jid || kontak.no_hp);
+
+    const r = await fetch(`${EVOLUTION_URL}/message/sendText/${EVOLUTION_INSTANCE}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: EVOLUTION_APIKEY },
+      body: JSON.stringify({ number, text }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(502).json({ error: "Evolution gagal: " + t.slice(0, 200) });
+    }
+    const sent = await r.json().catch(() => ({}));
+    await pool.query(
+      `INSERT INTO percakapan (kontak_id, jid, arah, pesan, tipe, wa_message_id)
+       VALUES ($1,$2,'keluar',$3,'text',$4)`,
+      [kontak.id, kontak.jid, text, sent?.key?.id || null]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/health", (_r, res) => res.json({ ok: true }));
+app.use(express.static(path.join(__dirname, "public")));
+
+migrate()
+  .then(() => app.listen(PORT, () => console.log(`[inbox] jalan di :${PORT}`)))
+  .catch(e => { console.error("[migrate] gagal:", e.message); process.exit(1); });

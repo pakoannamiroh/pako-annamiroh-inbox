@@ -1,0 +1,17 @@
+services:
+  inbox:
+    build: .
+    container_name: annamiroh_inbox
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      # Hanya listen di localhost server. Akses browser lewat Caddy (HTTPS).
+      - "127.0.0.1:3100:3100"
+    networks:
+      - namiroh
+
+networks:
+  namiroh:
+    external: true
+    # Nama network stack utama (~/namiroh). Cek dg: docker network ls
+    name: namiroh_default

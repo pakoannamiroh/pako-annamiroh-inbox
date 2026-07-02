@@ -1,0 +1,11 @@
+{
+  "name": "pako-annamiroh-inbox",
+  "version": "0.5.0",
+  "description": "Inbox WhatsApp CRM An Namiroh (Fase 0.5)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
