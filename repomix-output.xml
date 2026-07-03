@@ -54,6 +54,275 @@ Simpan Mapping Klik LP.json
 <files>
 This section contains the contents of the repository's files.
 
+<file path="docker-compose.yml">
+services:
+  inbox:
+    build: .
+    container_name: annamiroh_inbox
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      # Hanya listen di localhost server. Akses browser lewat Caddy (HTTPS).
+      - "127.0.0.1:3100:3100"
+    networks:
+      - namiroh
+
+networks:
+  namiroh:
+    external: true
+    # Nama network stack utama (~/namiroh). Cek dg: docker network ls
+    name: namiroh_default
+</file>
+
+<file path="Dockerfile">
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev
+COPY server.js ./
+COPY public ./public
+ENV PORT=3100
+EXPOSE 3100
+CMD ["node", "server.js"]
+</file>
+
+<file path="npx repomix.txt">
+
+</file>
+
+<file path="package.json">
+{
+  "name": "pako-annamiroh-inbox",
+  "version": "0.5.0",
+  "description": "Inbox WhatsApp CRM An Namiroh (Fase 0.5)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
+</file>
+
+<file path="README.md">
+# Pako An Namiroh - Inbox (Fase 0.5)
+
+Inbox WhatsApp custom-code untuk CRM An Namiroh. Menyambungkan gateway
+WhatsApp (Evolution API) ke UI inbox, menampilkan daftar & detail chat,
+dan mencocokkan **kode unik** dari pesan masuk -> mengambil `fbc/fbp/utm`
+dari tabel `mapping_klik` ke `kontak`.
+
+## Isi
+- `server.js`        Backend (Express + Postgres) + webhook Evolution
+- `public/index.html`UI inbox (1 file, tanpa build step)
+- `Dockerfile`       Image Node
+- `docker-compose.yml` Jalankan sebagai container, nyambung ke network `namiroh_default`
+- `.env.example`     Contoh konfigurasi (salin jadi `.env`)
+
+## Jalankan (di VPS)
+```bash
+cp .env.example .env   # lalu isi DB_PASSWORD, EVOLUTION_INSTANCE, UI_PASS
+docker compose up -d --build
+curl -s http://127.0.0.1:3100/health   # {"ok":true}
+```
+
+## Endpoint
+- `POST /webhook/wa-masuk`  <- diarahkan dari Evolution (event MESSAGES_UPSERT)
+- `GET  /api/chats`         daftar kontak + pesan terakhir
+- `GET  /api/chats/:id/messages`
+- `POST /api/chats/:id/send`  { text }
+- `GET  /`                  UI inbox
+
+Backend menjalankan migrasi tabel otomatis (aman & idempoten).
+Panduan lengkap langkah-demi-langkah ada di halaman Notion Fase 0.5.
+</file>
+
+<file path="Simpan Mapping Klik LP.json">
+{
+  "name": "Simpan Mapping Klik LP",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "simpan-klik",
+        "options": {
+          "responseCode": {
+            "values": {}
+          },
+          "responseData": "{\"status\":\"ok\"}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://namirohpako.pages.dev"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        256,
+        416
+      ],
+      "webhookId": "37997b99-d556-4086-bb7f-8b24000683a3"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO mapping_klik (kode, fbc, fbp, utm_source, utm_campaign, halaman, waktu) VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) ON CONFLICT (kode) DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.kode, $json.body.fbc, $json.body.fbp, $json.body.utm_source, $json.body.utm_campaign, $json.body.halaman, $json.body.waktu] }}"
+        }
+      },
+      "id": "postgres-exec",
+      "name": "Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        480,
+        416
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WoiEPb8i9NOgAocW",
+          "name": "Annamiroh App DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v20.0/27189018400754648/events",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "EAAN0P4e4ZBdYBRhOjRYLc417jjxvSLRGDTlRWz3WNKuJX5EAZBSAPHFtgZAsdNZBvILtrct9OkLKnO5kOhm1ADHWiohupghs65nNZAU652GBMInhCv4LAod9P1dvFSA6ZCEb33aZCwcZCH04c9psHFM4HPR2f7dhrzXEtsByIxxRZCqZAeCFNIuv11ukZBLXZAqRXvy3MQZDZD"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"test_event_code\": \"TEST22615\",\n  \"data\": [\n    {\n      \"event_name\": \"Purchase\",\n      \"event_time\":  Math.floor($now.toSeconds()) ,\n      \"action_source\": \"website\",\n      \"event_source_url\": \"https://annamiroh-pako.netlify.app/\",\n      \"event_id\": \"purchase_test_ Math.floor($now.toSeconds()) \",\n      \"user_data\": {\n        \"client_user_agent\": \"n8n-meta-capi/1.0\"\n      },\n      \"custom_data\": {\n        \"currency\": \"IDR\",\n        \"value\":  $json.body && $json.body.value ? $json.body.value : 1000000 \n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        112
+      ],
+      "id": "86629e75-2bc1-406a-9eb2-33db0071b99f",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meta-capi-purchase-test",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        272,
+        112
+      ],
+      "id": "459e4f40-bed1-4104-a758-e3f99f3e5b4c",
+      "name": "Webhook1",
+      "webhookId": "e7cafe47-6133-4acd-8e49-49cafd8e0703"
+    },
+    {
+      "parameters": {
+        "content": "## Meta CAPI Purchase",
+        "height": 256,
+        "width": 576,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        144,
+        32
+      ],
+      "typeVersion": 1,
+      "id": "f577cf26-9d43-47ca-bf0d-56e6146048ca",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Simpan Mapping Klik LP",
+        "height": 256,
+        "width": 576,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        144,
+        320
+      ],
+      "typeVersion": 1,
+      "id": "c872d0e6-18cb-43d5-9fc3-125c001a2377",
+      "name": "Sticky Note1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "versionId": "0806f3ed-39fd-4683-9742-c5a4d8012dcc",
+  "meta": {
+    "instanceId": "a603a88bf7a88eea5f1742914102abcb8f6fbfbcffaa7ee5cefd238ee155a612"
+  },
+  "nodeGroups": [],
+  "id": "Er3SFo2ZpdwdjPSH",
+  "tags": []
+}
+</file>
+
 <file path="CS BARU.json">
 {
   "name": "CS BARU",
@@ -69,8 +338,8 @@ This section contains the contents of the repository's files.
       "name": "Descargar Media1",
       "type": "n8n-nodes-evolution-api.evolutionApi",
       "position": [
-        19424,
-        7360
+        19552,
+        7312
       ],
       "typeVersion": 1,
       "credentials": {
@@ -98,8 +367,8 @@ This section contains the contents of the repository's files.
       "name": "get_message (text)1",
       "type": "n8n-nodes-base.set",
       "position": [
-        19424,
-        7024
+        19552,
+        6976
       ],
       "typeVersion": 3.4
     },
@@ -167,8 +436,8 @@ This section contains the contents of the repository's files.
       "name": "Message Type1",
       "type": "n8n-nodes-base.switch",
       "position": [
-        19184,
-        7168
+        19312,
+        7120
       ],
       "typeVersion": 3.3
     },
@@ -199,6 +468,12 @@ This section contains the contents of the repository's files.
               "name": "max_chat_history",
               "type": "string",
               "value": "40"
+            },
+            {
+              "id": "1dd081e9-37ec-449e-962c-2da67e812c39",
+              "name": "",
+              "value": "",
+              "type": "string"
             }
           ]
         },
@@ -390,8 +665,8 @@ This section contains the contents of the repository's files.
       "name": "Push to Buffer (AlbumGroup)1",
       "type": "n8n-nodes-base.redis",
       "position": [
-        19424,
-        7184
+        19552,
+        7136
       ],
       "typeVersion": 1,
       "credentials": {
@@ -1017,12 +1292,13 @@ This section contains the contents of the repository's files.
           "id": "kPDn4GnOUZiedc4N",
           "name": "Postgres account"
         }
-      }
+      },
+      "disabled": true
     },
     {
       "parameters": {
         "resource": "messages-api",
-        "instanceName": "cs-test",
+        "instanceName": "={{ $('Webhook1').item.json.body.instance }}",
         "remoteJid": "={{  $('Global Variables1').item.json.number }}",
         "messageText": "={{ $json.reponse }}",
         "options_message": {}
@@ -2642,7 +2918,7 @@ This section contains the contents of the repository's files.
     {
       "parameters": {
         "content": "## ⚠️ Core Configuration\nControl the buffering and memory logic here:\n\n*   **wait_buffer**: The debounce window (in seconds). The workflow waits this long for subsequent text messages to group them into a single AI prompt.\n*   **wait_conversation**: Redis TTL (in seconds). How long the active conversation stays in the \"Hot Cache\" after the last message.\n*   **max_chat_history**: The hard limit of past messages to fetch from PostgreSQL (Cold Storage) when the cache is empty.",
-        "height": 464,
+        "height": 528,
         "width": 400,
         "color": 3
       },
@@ -2651,7 +2927,7 @@ This section contains the contents of the repository's files.
       "type": "n8n-nodes-base.stickyNote",
       "position": [
         18704,
-        6896
+        6832
       ],
       "typeVersion": 1
     },
@@ -2666,25 +2942,6 @@ This section contains the contents of the repository's files.
         6512
       ],
       "webhookId": "e3cfc0e1-3341-4cd7-803d-e08bcc94fc51"
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
-      "typeVersion": 1.2,
-      "position": [
-        24928,
-        7792
-      ],
-      "id": "284fcc14-d334-4fb2-97c5-853cb2749608",
-      "name": "Embeddings OpenAI1",
-      "credentials": {
-        "openAiApi": {
-          "id": "uM54M0kcXKH6rtub",
-          "name": "OpenAI account"
-        }
-      }
     },
     {
       "parameters": {
@@ -2705,32 +2962,6 @@ This section contains the contents of the repository's files.
       ],
       "id": "904308e1-210b-4311-94be-dce9d40936ae",
       "name": "OpenAI Chat Model",
-      "credentials": {
-        "openAiApi": {
-          "id": "uM54M0kcXKH6rtub",
-          "name": "OpenAI account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "model": {
-          "__rl": true,
-          "value": "gpt-4o-mini",
-          "mode": "list",
-          "cachedResultName": "gpt-4o-mini"
-        },
-        "builtInTools": {},
-        "options": {}
-      },
-      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
-      "typeVersion": 1.3,
-      "position": [
-        24272,
-        7712
-      ],
-      "id": "74a62a03-2955-4347-a29c-cce9541e85a9",
-      "name": "OpenAI Chat Model1",
       "credentials": {
         "openAiApi": {
           "id": "uM54M0kcXKH6rtub",
@@ -2779,30 +3010,89 @@ This section contains the contents of the repository's files.
     },
     {
       "parameters": {
-        "mode": "retrieve-as-tool",
-        "toolDescription": "Gunakan alat ini untuk mencari informasi resmi dari basis pengetahuan perusahaan. Berisi: (1) An Namiroh — paket & harga umroh/haji, jadwal keberangkatan, fasilitas (hotel, maskapai), syarat & dokumen, serta ketentuan pembayaran; (2) Pako Kreatif — jenis kado ilustrasi, harga, proses pemesanan, dan waktu pengerjaan. WAJIB dipanggil setiap kali pelanggan menanyakan harga, paket, jadwal, fasilitas, ketentuan, atau detail produk/layanan, supaya jawaban akurat dan tidak mengarang.",
-        "tableName": {
-          "__rl": true,
-          "value": "documents",
-          "mode": "list",
-          "cachedResultName": "documents"
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(\n  (SELECT ai_aktif\n   FROM kontak\n   WHERE no_hp::text = $1\n      OR jid = $1\n      OR jid = $1 || '@s.whatsapp.net'\n   LIMIT 1),\n  true\n) AS ai_aktif;",
+        "options": {
+          "queryReplacement": "={{ [$('Global Variables1').item.json.number] }}"
+        }
+      },
+      "id": "f2-ai-active-check-postgres",
+      "name": "Cek AI Aktif",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        19024,
+        7184
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "WoiEPb8i9NOgAocW",
+          "name": "Annamiroh App DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ai-aktif-true",
+              "leftValue": "={{ $json.ai_aktif }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
         },
-        "topK": 10,
-        "useReranker": true,
         "options": {}
       },
-      "id": "c8b1fd8f-dfc7-4160-8be3-4f94955999a6",
-      "name": "Supabase Vector Store1",
-      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "id": "f2-ai-active-if",
+      "name": "AI aktif?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
       "position": [
-        24528,
-        7712
+        19168,
+        6816
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f2-ai-inactive-stop",
+      "name": "AI Nonaktif - Stop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        19520,
+        6768
+      ]
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        24304,
+        7696
       ],
-      "typeVersion": 1.3,
+      "id": "7ddb3614-e0be-4c06-98e2-04af3feac948",
+      "name": "OpenRouter Chat Model",
       "credentials": {
-        "supabaseApi": {
-          "id": "JHgahS9PRuuHWawi",
-          "name": "Supabase account"
+        "openRouterApi": {
+          "id": "UV3WS2XL8dKylL5Y",
+          "name": "OpenRouter account 2"
         }
       }
     }
@@ -2865,17 +3155,6 @@ This section contains the contents of the repository's files.
         [
           {
             "node": "Descargar Media1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Global Variables1": {
-      "main": [
-        [
-          {
-            "node": "Message Type1",
             "type": "main",
             "index": 0
           }
@@ -3871,33 +4150,11 @@ This section contains the contents of the repository's files.
         ]
       ]
     },
-    "Embeddings OpenAI1": {
-      "ai_embedding": [
-        [
-          {
-            "node": "Supabase Vector Store1",
-            "type": "ai_embedding",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "OpenAI Chat Model": {
       "ai_languageModel": [
         [
           {
             "node": "Context Refiner1",
-            "type": "ai_languageModel",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "OpenAI Chat Model1": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "AI Agent1",
             "type": "ai_languageModel",
             "index": 0
           }
@@ -3936,12 +4193,63 @@ This section contains the contents of the repository's files.
         ]
       ]
     },
-    "Supabase Vector Store1": {
-      "ai_tool": [
+    "Create Table chat_history1": {
+      "main": [
+        [
+          {
+            "node": "AI Nonaktif - Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Global Variables1": {
+      "main": [
+        [
+          {
+            "node": "Cek AI Aktif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cek AI Aktif": {
+      "main": [
+        [
+          {
+            "node": "AI aktif?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI aktif?": {
+      "main": [
+        [
+          {
+            "node": "Message Type1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Nonaktif - Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
         [
           {
             "node": "AI Agent1",
-            "type": "ai_tool",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]
@@ -3952,11 +4260,13 @@ This section contains the contents of the repository's files.
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
-    "availableInMCP": false
+    "availableInMCP": true
   },
-  "versionId": "1ccd20e0-8b65-465d-8af8-15dcff88f1b8",
+  "versionId": "b6bd648b-bfa2-422c-9269-b83760cbd9e5",
   "meta": {
     "templateCredsSetupCompleted": true,
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
     "instanceId": "a603a88bf7a88eea5f1742914102abcb8f6fbfbcffaa7ee5cefd238ee155a612"
   },
   "nodeGroups": [],
@@ -3969,275 +4279,6 @@ This section contains the contents of the repository's files.
       "name": "An Namiroh"
     }
   ]
-}
-</file>
-
-<file path="docker-compose.yml">
-services:
-  inbox:
-    build: .
-    container_name: annamiroh_inbox
-    env_file: .env
-    restart: unless-stopped
-    ports:
-      # Hanya listen di localhost server. Akses browser lewat Caddy (HTTPS).
-      - "127.0.0.1:3100:3100"
-    networks:
-      - namiroh
-
-networks:
-  namiroh:
-    external: true
-    # Nama network stack utama (~/namiroh). Cek dg: docker network ls
-    name: namiroh_default
-</file>
-
-<file path="Dockerfile">
-FROM node:20-alpine
-WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
-COPY server.js ./
-COPY public ./public
-ENV PORT=3100
-EXPOSE 3100
-CMD ["node", "server.js"]
-</file>
-
-<file path="npx repomix.txt">
-
-</file>
-
-<file path="package.json">
-{
-  "name": "pako-annamiroh-inbox",
-  "version": "0.5.0",
-  "description": "Inbox WhatsApp CRM An Namiroh (Fase 0.5)",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "dependencies": {
-    "express": "^4.19.2",
-    "pg": "^8.12.0"
-  }
-}
-</file>
-
-<file path="README.md">
-# Pako An Namiroh - Inbox (Fase 0.5)
-
-Inbox WhatsApp custom-code untuk CRM An Namiroh. Menyambungkan gateway
-WhatsApp (Evolution API) ke UI inbox, menampilkan daftar & detail chat,
-dan mencocokkan **kode unik** dari pesan masuk -> mengambil `fbc/fbp/utm`
-dari tabel `mapping_klik` ke `kontak`.
-
-## Isi
-- `server.js`        Backend (Express + Postgres) + webhook Evolution
-- `public/index.html`UI inbox (1 file, tanpa build step)
-- `Dockerfile`       Image Node
-- `docker-compose.yml` Jalankan sebagai container, nyambung ke network `namiroh_default`
-- `.env.example`     Contoh konfigurasi (salin jadi `.env`)
-
-## Jalankan (di VPS)
-```bash
-cp .env.example .env   # lalu isi DB_PASSWORD, EVOLUTION_INSTANCE, UI_PASS
-docker compose up -d --build
-curl -s http://127.0.0.1:3100/health   # {"ok":true}
-```
-
-## Endpoint
-- `POST /webhook/wa-masuk`  <- diarahkan dari Evolution (event MESSAGES_UPSERT)
-- `GET  /api/chats`         daftar kontak + pesan terakhir
-- `GET  /api/chats/:id/messages`
-- `POST /api/chats/:id/send`  { text }
-- `GET  /`                  UI inbox
-
-Backend menjalankan migrasi tabel otomatis (aman & idempoten).
-Panduan lengkap langkah-demi-langkah ada di halaman Notion Fase 0.5.
-</file>
-
-<file path="Simpan Mapping Klik LP.json">
-{
-  "name": "Simpan Mapping Klik LP",
-  "nodes": [
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "simpan-klik",
-        "options": {
-          "responseCode": {
-            "values": {}
-          },
-          "responseData": "{\"status\":\"ok\"}",
-          "responseHeaders": {
-            "entries": [
-              {
-                "name": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "name": "Access-Control-Allow-Origin",
-                "value": "https://namirohpako.pages.dev"
-              },
-              {
-                "name": "Access-Control-Allow-Methods",
-                "value": "POST, OPTIONS"
-              },
-              {
-                "name": "Access-Control-Allow-Headers",
-                "value": "Content-Type"
-              }
-            ]
-          }
-        }
-      },
-      "id": "webhook-trigger",
-      "name": "Webhook",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        256,
-        416
-      ],
-      "webhookId": "37997b99-d556-4086-bb7f-8b24000683a3"
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO mapping_klik (kode, fbc, fbp, utm_source, utm_campaign, halaman, waktu) VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now())) ON CONFLICT (kode) DO NOTHING;",
-        "options": {
-          "queryReplacement": "={{ [$json.body.kode, $json.body.fbc, $json.body.fbp, $json.body.utm_source, $json.body.utm_campaign, $json.body.halaman, $json.body.waktu] }}"
-        }
-      },
-      "id": "postgres-exec",
-      "name": "Postgres",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2,
-      "position": [
-        480,
-        416
-      ],
-      "credentials": {
-        "postgres": {
-          "id": "WoiEPb8i9NOgAocW",
-          "name": "Annamiroh App DB"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "url": "https://graph.facebook.com/v20.0/27189018400754648/events",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "access_token",
-              "value": "EAAN0P4e4ZBdYBRhOjRYLc417jjxvSLRGDTlRWz3WNKuJX5EAZBSAPHFtgZAsdNZBvILtrct9OkLKnO5kOhm1ADHWiohupghs65nNZAU652GBMInhCv4LAod9P1dvFSA6ZCEb33aZCwcZCH04c9psHFM4HPR2f7dhrzXEtsByIxxRZCqZAeCFNIuv11ukZBLXZAqRXvy3MQZDZD"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"test_event_code\": \"TEST22615\",\n  \"data\": [\n    {\n      \"event_name\": \"Purchase\",\n      \"event_time\":  Math.floor($now.toSeconds()) ,\n      \"action_source\": \"website\",\n      \"event_source_url\": \"https://annamiroh-pako.netlify.app/\",\n      \"event_id\": \"purchase_test_ Math.floor($now.toSeconds()) \",\n      \"user_data\": {\n        \"client_user_agent\": \"n8n-meta-capi/1.0\"\n      },\n      \"custom_data\": {\n        \"currency\": \"IDR\",\n        \"value\":  $json.body && $json.body.value ? $json.body.value : 1000000 \n      }\n    }\n  ]\n}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        480,
-        112
-      ],
-      "id": "86629e75-2bc1-406a-9eb2-33db0071b99f",
-      "name": "HTTP Request"
-    },
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "meta-capi-purchase-test",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        272,
-        112
-      ],
-      "id": "459e4f40-bed1-4104-a758-e3f99f3e5b4c",
-      "name": "Webhook1",
-      "webhookId": "e7cafe47-6133-4acd-8e49-49cafd8e0703"
-    },
-    {
-      "parameters": {
-        "content": "## Meta CAPI Purchase",
-        "height": 256,
-        "width": 576,
-        "color": 4
-      },
-      "type": "n8n-nodes-base.stickyNote",
-      "position": [
-        144,
-        32
-      ],
-      "typeVersion": 1,
-      "id": "f577cf26-9d43-47ca-bf0d-56e6146048ca",
-      "name": "Sticky Note"
-    },
-    {
-      "parameters": {
-        "content": "## Simpan Mapping Klik LP",
-        "height": 256,
-        "width": 576,
-        "color": 4
-      },
-      "type": "n8n-nodes-base.stickyNote",
-      "position": [
-        144,
-        320
-      ],
-      "typeVersion": 1,
-      "id": "c872d0e6-18cb-43d5-9fc3-125c001a2377",
-      "name": "Sticky Note1"
-    }
-  ],
-  "pinData": {},
-  "connections": {
-    "Webhook": {
-      "main": [
-        [
-          {
-            "node": "Postgres",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Webhook1": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
-  },
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate",
-    "saveDataErrorExecution": "all",
-    "saveDataSuccessExecution": "all",
-    "saveManualExecutions": true
-  },
-  "versionId": "0806f3ed-39fd-4683-9742-c5a4d8012dcc",
-  "meta": {
-    "instanceId": "a603a88bf7a88eea5f1742914102abcb8f6fbfbcffaa7ee5cefd238ee155a612"
-  },
-  "nodeGroups": [],
-  "id": "Er3SFo2ZpdwdjPSH",
-  "tags": []
 }
 </file>
 
@@ -4549,7 +4590,7 @@ function renderList(){
     const el=document.createElement("div");
     el.className="chat-item"+(state.active===c.id?" active":"");
     el.onclick=()=>openChat(c.id);
-    const aiBadge=c.ai_aktif===false?'<span class="badge b-ai off">AI Off</span>':'<span class="badge b-ai">AI On</span>';
+    const aiBadge=c.ai_aktif===false?'<span class="badge b-ai off">CS Manual</span>':'<span class="badge b-ai">AI Aktif</span>';
     const unread=c.unread>0?`<span class="unread">${c.unread}</span>`:"";
     el.innerHTML=`
       <div class="ci-avatar" style="background:${LEADCOLOR[c.status_lead]||"#B5B2AD"}">${esc(initials(c.nama))}</div>
@@ -4566,11 +4607,11 @@ function applyAIToggleUI(c){
   const sw=$("#ai-switch");
   if(c.ai_aktif===false){
     sw.classList.add("off");
-    $("#ai-mode").textContent="CS Manual";
+    $("#ai-mode").textContent="Mode CS Manual";
     $("#ai-mode").style.color="var(--text-2)";
   }else{
     sw.classList.remove("off");
-    $("#ai-mode").innerHTML='<span>AI Aktif</span>';
+    $("#ai-mode").textContent="AI Aktif";
     $("#ai-mode").style.color="";
   }
 }
@@ -4819,6 +4860,8 @@ const {
   CAPI_TOKEN = "",              // Token Meta Conversions API
   CAPI_DATASET_ID = "",         // ID Dataset Meta Pixel
   CAPI_TEST_CODE = "",          // Test event code (isi saat uji, kosongkan di produksi)
+  N8N_CS_WEBHOOK_URL = "",      // Webhook production n8n workflow CS
+  N8N_CS_WEBHOOK_TOKEN = "",    // opsional: token tambahan untuk webhook n8n
 } = process.env;
 
 const pool = new Pool({
@@ -4895,6 +4938,42 @@ async function sendCapiEvent({ eventName, eventId, no_hp, nama, fbc, fbp, custom
   const result = await r.json();
   if (!r.ok || result.error) throw new Error(JSON.stringify(result.error || result));
   return result;
+}
+
+// Helper: trigger workflow n8n CS dengan payload asli Evolution API
+async function triggerN8nCsWorkflow(originalBody) {
+  if (!N8N_CS_WEBHOOK_URL) {
+    console.log("[n8n-cs] skipped: N8N_CS_WEBHOOK_URL kosong");
+    return { skipped: "n8n_url_empty" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  const headers = { "Content-Type": "application/json" };
+  if (N8N_CS_WEBHOOK_TOKEN) headers["X-Webhook-Token"] = N8N_CS_WEBHOOK_TOKEN;
+
+  try {
+    const r = await fetch(N8N_CS_WEBHOOK_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(originalBody || {}),
+      signal: controller.signal,
+    });
+    const text = await r.text().catch(() => "");
+    console.log(`[n8n-cs] triggered status=${r.status}`);
+    return {
+      ok: r.ok,
+      status: r.status,
+      statusText: r.statusText,
+      body: text ? text.slice(0, 500) : undefined,
+    };
+  } catch (e) {
+    const message = e.name === "AbortError" ? "timeout" : e.message;
+    console.error("[n8n-cs] error", message);
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ---------- Migrasi idempoten (aman dijalankan berulang) ----------
@@ -5027,7 +5106,24 @@ app.post("/webhook/wa-masuk", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
       [kontak.id, jid, fromMe ? "keluar" : "masuk", teks, tipe, waId]);
 
-    res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc });
+    if (fromMe) {
+      return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n_skipped: "from_me" });
+    }
+
+    if (!fromMe && kontak.ai_aktif === false) {
+      console.log("[n8n-cs] skipped: manual");
+      return res.json({
+        ok: true,
+        kontak_id: kontak.id,
+        fbc: !!kontak.fbc,
+        ai_skipped: "manual",
+        n8n_skipped: "manual",
+      });
+    }
+
+    const n8n = await triggerN8nCsWorkflow(req.body);
+
+    res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n });
   } catch (e) {
     console.error("[webhook]", e.message);
     res.status(500).json({ ok: false, error: e.message });
@@ -5169,8 +5265,9 @@ app.patch("/api/chats/:id/ai", async (req, res) => {
     const { ai_aktif } = req.body || {};
     if (typeof ai_aktif !== "boolean")
       return res.status(400).json({ error: "ai_aktif (boolean) wajib diisi" });
-    await pool.query("UPDATE kontak SET ai_aktif=$1, diperbarui=now() WHERE id=$2",
+    const result = await pool.query("UPDATE kontak SET ai_aktif=$1, diperbarui=now() WHERE id=$2",
       [ai_aktif, req.params.id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: "kontak tidak ditemukan" });
     res.json({ ok: true, ai_aktif });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
