@@ -369,6 +369,17 @@ app.patch("/api/chats/:id/lead", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.patch("/api/chats/:id/ai", async (req, res) => {
+  try {
+    const { ai_aktif } = req.body || {};
+    if (typeof ai_aktif !== "boolean")
+      return res.status(400).json({ error: "ai_aktif (boolean) wajib diisi" });
+    await pool.query("UPDATE kontak SET ai_aktif=$1, diperbarui=now() WHERE id=$2",
+      [ai_aktif, req.params.id]);
+    res.json({ ok: true, ai_aktif });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/health", (_r, res) => res.json({ ok: true }));
 app.use(express.static(path.join(__dirname, "public")));
 

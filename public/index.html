@@ -149,7 +149,7 @@
             <div class="conv-title" id="c-name">—</div>
             <div class="conv-sub" id="c-sub">—</div>
           </div>
-          <div class="ai-toggle" title="Kontrol AI aktif mulai Fase 2">
+          <div class="ai-toggle" title="Klik untuk aktif/nonaktifkan balasan AI di chat ini">
             <div class="toggle-label">Mode <span id="ai-mode">CS Manual</span></div>
             <div class="switch off" id="ai-switch"></div>
           </div>
@@ -318,6 +318,19 @@ function renderList(){
   }
 }
 
+function applyAIToggleUI(c){
+  const sw=$("#ai-switch");
+  if(c.ai_aktif===false){
+    sw.classList.add("off");
+    $("#ai-mode").textContent="CS Manual";
+    $("#ai-mode").style.color="var(--text-2)";
+  }else{
+    sw.classList.remove("off");
+    $("#ai-mode").innerHTML='<span>AI Aktif</span>';
+    $("#ai-mode").style.color="";
+  }
+}
+
 async function openChat(id){
   state.active=id;renderList();
   const c=state.chats.find(x=>x.id===id);if(!c)return;
@@ -327,10 +340,7 @@ async function openChat(id){
   $("#c-avatar").textContent=initials(c.nama);$("#c-avatar").style.background=col;
   $("#c-name").textContent=c.nama||c.no_hp;
   $("#c-sub").textContent="+"+(c.no_hp||"")+(c.sumber_iklan?" · "+c.sumber_iklan:"");
-  // AI toggle (tampilan; kontrol AI aktif Fase 2)
-  const sw=$("#ai-switch");
-  if(c.ai_aktif===false){sw.classList.add("off");$("#ai-mode").textContent="CS Manual";$("#ai-mode").style.color="var(--text-2)"}
-  else{sw.classList.remove("off");$("#ai-mode").innerHTML='<span>AI Aktif</span>'}
+  applyAIToggleUI(c);
   // Lead score
   const num=$("#score-num"),ring=$("#score-ring"),lvl=$("#score-lvl");
   if(typeof c.skor_lead==="number"){
@@ -503,10 +513,32 @@ async function loadSignals(kontakId) {
   }
 }
 
+async function toggleAI(){
+  if(!state.active) return;
+  const c=state.chats.find(x=>x.id===state.active);
+  if(!c) return;
+  const next=(c.ai_aktif===false);
+  if(state.demo){c.ai_aktif=next;applyAIToggleUI(c);renderList();return;}
+  const sw=document.querySelector("#ai-switch");
+  sw.style.pointerEvents="none";
+  try{
+    await api("/api/chats/"+c.id+"/ai", {method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ai_aktif:next})});
+    c.ai_aktif=next;
+    applyAIToggleUI(c);
+    renderList();
+    toast(next ? "🤖 AI diaktifkan untuk chat ini"
+               : "🙋 Mode CS Manual — AI berhenti balas otomatis");
+  }catch(e){toast("Gagal ubah mode AI: "+e.message);}
+  finally{sw.style.pointerEvents="";}
+}
+
 $("#filters").addEventListener("click",e=>{const c=e.target.closest(".chip");if(!c)return;[...document.querySelectorAll(".chip")].forEach(x=>x.classList.remove("active"));c.classList.add("active");state.filter=c.dataset.f;renderList()});
 $("#q").addEventListener("input",e=>{state.q=e.target.value;renderList()});
 $("#send-btn").addEventListener("click",send);
 $("#reply-input").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();send()}});
+$("#ai-switch").addEventListener("click",toggleAI);
 document.addEventListener("click",e=>{if(e.target.closest("[data-soon]"))toast("Fitur ini aktif mulai Fase 1 / 2")});
 
 loadChats();
