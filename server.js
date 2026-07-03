@@ -270,6 +270,8 @@ app.post("/webhook/wa-masuk", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
       [kontak.id, jid, fromMe ? "keluar" : "masuk", teks, tipe, waId]);
 
+    console.log(`[wa-masuk] kontak_id=${kontak.id} fromMe=${fromMe} ai_aktif=${kontak.ai_aktif}`);
+
     if (fromMe) {
       return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n_skipped: "from_me" });
     }
