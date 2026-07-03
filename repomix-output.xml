@@ -53,6 +53,89 @@ Simpan Mapping Klik LP.json
 <files>
 This section contains the contents of the repository's files.
 
+<file path="docker-compose.yml">
+services:
+  inbox:
+    build: .
+    container_name: annamiroh_inbox
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      # Hanya listen di localhost server. Akses browser lewat Caddy (HTTPS).
+      - "127.0.0.1:3100:3100"
+    networks:
+      - namiroh
+
+networks:
+  namiroh:
+    external: true
+    # Nama network stack utama (~/namiroh). Cek dg: docker network ls
+    name: namiroh_default
+</file>
+
+<file path="Dockerfile">
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev
+COPY server.js ./
+COPY public ./public
+ENV PORT=3100
+EXPOSE 3100
+CMD ["node", "server.js"]
+</file>
+
+<file path="npx repomix.txt">
+
+</file>
+
+<file path="package.json">
+{
+  "name": "pako-annamiroh-inbox",
+  "version": "0.5.0",
+  "description": "Inbox WhatsApp CRM An Namiroh (Fase 0.5)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
+</file>
+
+<file path="README.md">
+# Pako An Namiroh - Inbox (Fase 0.5)
+
+Inbox WhatsApp custom-code untuk CRM An Namiroh. Menyambungkan gateway
+WhatsApp (Evolution API) ke UI inbox, menampilkan daftar & detail chat,
+dan mencocokkan **kode unik** dari pesan masuk -> mengambil `fbc/fbp/utm`
+dari tabel `mapping_klik` ke `kontak`.
+
+## Isi
+- `server.js`        Backend (Express + Postgres) + webhook Evolution
+- `public/index.html`UI inbox (1 file, tanpa build step)
+- `Dockerfile`       Image Node
+- `docker-compose.yml` Jalankan sebagai container, nyambung ke network `namiroh_default`
+- `.env.example`     Contoh konfigurasi (salin jadi `.env`)
+
+## Jalankan (di VPS)
+```bash
+cp .env.example .env   # lalu isi DB_PASSWORD, EVOLUTION_INSTANCE, UI_PASS
+docker compose up -d --build
+curl -s http://127.0.0.1:3100/health   # {"ok":true}
+```
+
+## Endpoint
+- `POST /webhook/wa-masuk`  <- diarahkan dari Evolution (event MESSAGES_UPSERT)
+- `GET  /api/chats`         daftar kontak + pesan terakhir
+- `GET  /api/chats/:id/messages`
+- `POST /api/chats/:id/send`  { text }
+- `GET  /`                  UI inbox
+
+Backend menjalankan migrasi tabel otomatis (aman & idempoten).
+Panduan lengkap langkah-demi-langkah ada di halaman Notion Fase 0.5.
+</file>
+
 <file path="Simpan Mapping Klik LP.json">
 {
   "name": "Simpan Mapping Klik LP",
@@ -236,56 +319,6 @@ This section contains the contents of the repository's files.
   "nodeGroups": [],
   "id": "Er3SFo2ZpdwdjPSH",
   "tags": []
-}
-</file>
-
-<file path="docker-compose.yml">
-services:
-  inbox:
-    build: .
-    container_name: annamiroh_inbox
-    env_file: .env
-    restart: unless-stopped
-    ports:
-      # Hanya listen di localhost server. Akses browser lewat Caddy (HTTPS).
-      - "127.0.0.1:3100:3100"
-    networks:
-      - namiroh
-
-networks:
-  namiroh:
-    external: true
-    # Nama network stack utama (~/namiroh). Cek dg: docker network ls
-    name: namiroh_default
-</file>
-
-<file path="Dockerfile">
-FROM node:20-alpine
-WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
-COPY server.js ./
-COPY public ./public
-ENV PORT=3100
-EXPOSE 3100
-CMD ["node", "server.js"]
-</file>
-
-<file path="npx repomix.txt">
-
-</file>
-
-<file path="package.json">
-{
-  "name": "pako-annamiroh-inbox",
-  "version": "0.5.0",
-  "description": "Inbox WhatsApp CRM An Namiroh (Fase 0.5)",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "dependencies": {
-    "express": "^4.19.2",
-    "pg": "^8.12.0"
-  }
 }
 </file>
 
@@ -499,6 +532,45 @@ CMD ["node", "server.js"]
     </div>
   </div>
 </div>
+<div id="modal-pay" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(30,28,26,0.45);align-items:center;justify-content:center">
+  <div style="width:380px;background:#fff;border-radius:16px;padding:24px;box-shadow:0 12px 40px rgba(0,0,0,.2)">
+    <h2 style="font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:4px">💰 Konfirmasi Pembayaran</h2>
+    <p style="font-size:13px;color:var(--text-2);margin-bottom:18px">Kirim event <b>Purchase</b> ke Meta untuk <span id="modal-nama">—</span>.</p>
+
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Nilai order (Rp) — boleh dikosongkan</label>
+      <div style="display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <span style="padding:10px 12px;background:var(--soft);color:var(--text-2);font-size:14px;font-weight:600;border-right:1px solid var(--border)">Rp</span>
+        <input id="modal-nilai" type="number" min="0" placeholder="Contoh: 28500000"
+          style="flex:1;padding:10px 12px;border:none;font-size:14px;outline:none" />
+      </div>
+      <div style="font-size:11.5px;color:var(--text-2);margin-top:4px">Kosongkan bila hanya ingin kirim event tanpa nilai.</div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Status pembayaran</label>
+      <div style="display:flex;gap:8px" id="modal-status-row">
+        <div id="modal-dp" onclick="selectStatus('dp')"
+          style="flex:1;padding:9px;text-align:center;border-radius:8px;border:2px solid var(--green);background:var(--green-soft);color:var(--green);font-weight:700;cursor:pointer;font-size:13.5px">DP</div>
+        <div id="modal-lunas" onclick="selectStatus('lunas')"
+          style="flex:1;padding:9px;text-align:center;border-radius:8px;border:2px solid var(--border);color:var(--text-2);font-weight:600;cursor:pointer;font-size:13.5px">Lunas</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:20px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Catatan (opsional)</label>
+      <textarea id="modal-catatan" rows="2" placeholder="Mis. DP via BSI, transfer 19:50"
+        style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;resize:none;outline:none"></textarea>
+    </div>
+
+    <div style="display:flex;gap:10px">
+      <button onclick="closePayModal()"
+        style="flex:1;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--canvas);font-size:14px;font-weight:600;cursor:pointer">Batal</button>
+      <button id="modal-submit" onclick="submitPurchase()"
+        style="flex:2;padding:11px;border:none;border-radius:8px;background:var(--green);color:#fff;font-size:14px;font-weight:700;cursor:pointer">Kirim Purchase ke Meta →</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -660,31 +732,67 @@ async function sendSignal(kualitas) {
   }
 }
 
-function openPurchaseModal() {
-  if (!state.active) return;
-  const val = prompt('Nilai order (RP)? Kosongkan kalau tidak ingin kirim nilai.\nContoh: 28500000');
-  if (val === null) return; // user klik Cancel
-  sendPurchase(val);
+let modalStatus = 'dp';
+
+function selectStatus(s) {
+  modalStatus = s;
+  const dp = document.getElementById('modal-dp');
+  const lunas = document.getElementById('modal-lunas');
+  if (s === 'dp') {
+    dp.style.borderColor = 'var(--green)'; dp.style.background = 'var(--green-soft)'; dp.style.color = 'var(--green)';
+    lunas.style.borderColor = 'var(--border)'; lunas.style.background = ''; lunas.style.color = 'var(--text-2)';
+  } else {
+    lunas.style.borderColor = 'var(--blue)'; lunas.style.background = 'var(--blue-soft)'; lunas.style.color = 'var(--blue)';
+    dp.style.borderColor = 'var(--border)'; dp.style.background = ''; dp.style.color = 'var(--text-2)';
+  }
 }
 
-async function sendPurchase(nilai_order) {
-  const btn = document.querySelector('.sig-pay');
-  if (btn) btn.classList.add('loading');
+function openPurchaseModal() {
+  if (!state.active) return;
+  const chat = state.chats.find(c => c.id === state.active);
+  document.getElementById('modal-nama').textContent = chat ? (chat.nama || chat.no_hp) : '—';
+  document.getElementById('modal-nilai').value = '';
+  document.getElementById('modal-catatan').value = '';
+  selectStatus('dp');
+  const modal = document.getElementById('modal-pay');
+  modal.style.display = 'flex';
+}
+
+function closePayModal() {
+  document.getElementById('modal-pay').style.display = 'none';
+}
+
+async function submitPurchase() {
+  const nilai = document.getElementById('modal-nilai').value;
+  const catatan = document.getElementById('modal-catatan').value;
+  const btn = document.getElementById('modal-submit');
+  btn.textContent = 'Mengirim…'; btn.disabled = true;
   try {
     await api('/api/purchase', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kontak_id: state.active, nilai_order: nilai_order || null })
+      body: JSON.stringify({
+        kontak_id: state.active,
+        nilai_order: nilai ? Number(nilai) : null,
+        status: modalStatus,
+        catatan: catatan || null
+      })
     });
-    const nilaiText = nilai_order ? ' (Rp ' + Number(nilai_order).toLocaleString('id-ID') + ')' : '';
+    const nilaiText = nilai ? ' (Rp ' + Number(nilai).toLocaleString('id-ID') + ')' : '';
+    closePayModal();
     toast('💰 Purchase terkirim ke Meta!' + nilaiText);
     await loadSignals(state.active);
   } catch(e) {
     toast('Gagal kirim Purchase: ' + e.message);
   } finally {
-    if (btn) btn.classList.remove('loading');
+    btn.textContent = 'Kirim Purchase ke Meta →'; btn.disabled = false;
   }
 }
+
+// Tutup modal kalau klik di luar kotak
+document.getElementById('modal-pay').addEventListener('click', function(e) {
+  if (e.target === this) closePayModal();
+});
 
 async function loadSignals(kontakId) {
   const box = $('#log-box');
@@ -731,39 +839,6 @@ setInterval(()=>{if(!state.demo){loadChats();if(state.active)loadMessages(state.
 </script>
 </body>
 </html>
-</file>
-
-<file path="README.md">
-# Pako An Namiroh - Inbox (Fase 0.5)
-
-Inbox WhatsApp custom-code untuk CRM An Namiroh. Menyambungkan gateway
-WhatsApp (Evolution API) ke UI inbox, menampilkan daftar & detail chat,
-dan mencocokkan **kode unik** dari pesan masuk -> mengambil `fbc/fbp/utm`
-dari tabel `mapping_klik` ke `kontak`.
-
-## Isi
-- `server.js`        Backend (Express + Postgres) + webhook Evolution
-- `public/index.html`UI inbox (1 file, tanpa build step)
-- `Dockerfile`       Image Node
-- `docker-compose.yml` Jalankan sebagai container, nyambung ke network `namiroh_default`
-- `.env.example`     Contoh konfigurasi (salin jadi `.env`)
-
-## Jalankan (di VPS)
-```bash
-cp .env.example .env   # lalu isi DB_PASSWORD, EVOLUTION_INSTANCE, UI_PASS
-docker compose up -d --build
-curl -s http://127.0.0.1:3100/health   # {"ok":true}
-```
-
-## Endpoint
-- `POST /webhook/wa-masuk`  <- diarahkan dari Evolution (event MESSAGES_UPSERT)
-- `GET  /api/chats`         daftar kontak + pesan terakhir
-- `GET  /api/chats/:id/messages`
-- `POST /api/chats/:id/send`  { text }
-- `GET  /`                  UI inbox
-
-Backend menjalankan migrasi tabel otomatis (aman & idempoten).
-Panduan lengkap langkah-demi-langkah ada di halaman Notion Fase 0.5.
 </file>
 
 <file path="server.js">
@@ -905,6 +980,8 @@ async function migrate() {
       jenis TEXT,
       kualitas TEXT,
       nilai_order NUMERIC,
+      status_bayar TEXT,
+      catatan TEXT,
       event_id TEXT,
       status TEXT,
       pesan_error TEXT,
@@ -923,6 +1000,7 @@ async function migrate() {
     percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
       "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
     log_event: ["kontak_id INTEGER","jenis TEXT","kualitas TEXT","nilai_order NUMERIC",
+      "status_bayar TEXT","catatan TEXT",
       "event_id TEXT","status TEXT","pesan_error TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
   };
   for (const [tbl, defs] of Object.entries(cols))
@@ -1090,7 +1168,7 @@ app.post("/api/signal", async (req, res) => {
 // --- Fase 1: Kirim event Purchase ke Meta CAPI ---
 app.post("/api/purchase", async (req, res) => {
   try {
-    const { kontak_id, nilai_order } = req.body || {};
+    const { kontak_id, nilai_order, status, catatan } = req.body || {};
     if (!kontak_id) return res.status(400).json({ error: "kontak_id wajib diisi" });
     const { rows } = await pool.query("SELECT * FROM kontak WHERE id=$1", [kontak_id]);
     if (!rows.length) return res.status(404).json({ error: "kontak tidak ditemukan" });
@@ -1103,8 +1181,8 @@ app.post("/api/purchase", async (req, res) => {
       capiResult = await sendCapiEvent({ eventName: "Purchase", eventId, no_hp: k.no_hp, nama: k.nama, fbc: k.fbc, fbp: k.fbp, customData });
     } catch (e) { capiError = e.message; }
     await pool.query(
-      "INSERT INTO log_event (kontak_id, jenis, nilai_order, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5)",
-      [kontak_id, nilai_order || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+      "INSERT INTO log_event (kontak_id, jenis, nilai_order, status_bayar, catatan, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5,$6,$7)",
+      [kontak_id, nilai_order || null, status || null, catatan || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
     );
     if (capiError) return res.json({ ok: false, error: capiError });
     res.json({ ok: true, events_received: capiResult?.events_received });
