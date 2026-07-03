@@ -305,7 +305,7 @@ function renderList(){
     const el=document.createElement("div");
     el.className="chat-item"+(state.active===c.id?" active":"");
     el.onclick=()=>openChat(c.id);
-    const aiBadge=c.ai_aktif===false?'<span class="badge b-ai off">AI Off</span>':'<span class="badge b-ai">AI On</span>';
+    const aiBadge=c.ai_aktif===false?'<span class="badge b-ai off">CS Manual</span>':'<span class="badge b-ai">AI Aktif</span>';
     const unread=c.unread>0?`<span class="unread">${c.unread}</span>`:"";
     el.innerHTML=`
       <div class="ci-avatar" style="background:${LEADCOLOR[c.status_lead]||"#B5B2AD"}">${esc(initials(c.nama))}</div>
@@ -322,11 +322,11 @@ function applyAIToggleUI(c){
   const sw=$("#ai-switch");
   if(c.ai_aktif===false){
     sw.classList.add("off");
-    $("#ai-mode").textContent="CS Manual";
+    $("#ai-mode").textContent="Mode CS Manual";
     $("#ai-mode").style.color="var(--text-2)";
   }else{
     sw.classList.remove("off");
-    $("#ai-mode").innerHTML='<span>AI Aktif</span>';
+    $("#ai-mode").textContent="AI Aktif";
     $("#ai-mode").style.color="";
   }
 }

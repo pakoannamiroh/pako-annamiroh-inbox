@@ -232,6 +232,15 @@ app.post("/webhook/wa-masuk", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
       [kontak.id, jid, fromMe ? "keluar" : "masuk", teks, tipe, waId]);
 
+    if (!fromMe && kontak.ai_aktif === false) {
+      return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, ai_skipped: "manual" });
+    }
+
+    if (!fromMe) {
+      // Fase 2.2/2.3: hanya jalankan AI jika kontak.ai_aktif !== false
+      // TODO: panggil proses AI otomatis di sini.
+    }
+
     res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc });
   } catch (e) {
     console.error("[webhook]", e.message);
@@ -374,8 +383,9 @@ app.patch("/api/chats/:id/ai", async (req, res) => {
     const { ai_aktif } = req.body || {};
     if (typeof ai_aktif !== "boolean")
       return res.status(400).json({ error: "ai_aktif (boolean) wajib diisi" });
-    await pool.query("UPDATE kontak SET ai_aktif=$1, diperbarui=now() WHERE id=$2",
+    const result = await pool.query("UPDATE kontak SET ai_aktif=$1, diperbarui=now() WHERE id=$2",
       [ai_aktif, req.params.id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: "kontak tidak ditemukan" });
     res.json({ ok: true, ai_aktif });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
