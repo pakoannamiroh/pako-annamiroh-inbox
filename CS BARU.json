@@ -965,7 +965,7 @@
     {
       "parameters": {
         "resource": "messages-api",
-        "instanceName": "cs-test",
+        "instanceName": "={{ $('Webhook1').item.json.body.instance }}",
         "remoteJid": "={{  $('Global Variables1').item.json.number }}",
         "messageText": "={{ $json.reponse }}",
         "options_message": {}

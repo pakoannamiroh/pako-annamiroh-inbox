@@ -24,6 +24,8 @@ const {
   CAPI_TOKEN = "",              // Token Meta Conversions API
   CAPI_DATASET_ID = "",         // ID Dataset Meta Pixel
   CAPI_TEST_CODE = "",          // Test event code (isi saat uji, kosongkan di produksi)
+  N8N_CS_WEBHOOK_URL = "",      // Webhook production n8n workflow CS
+  N8N_CS_WEBHOOK_TOKEN = "",    // opsional: token tambahan untuk webhook n8n
 } = process.env;
 
 const pool = new Pool({
@@ -100,6 +102,42 @@ async function sendCapiEvent({ eventName, eventId, no_hp, nama, fbc, fbp, custom
   const result = await r.json();
   if (!r.ok || result.error) throw new Error(JSON.stringify(result.error || result));
   return result;
+}
+
+// Helper: trigger workflow n8n CS dengan payload asli Evolution API
+async function triggerN8nCsWorkflow(originalBody) {
+  if (!N8N_CS_WEBHOOK_URL) {
+    console.log("[n8n-cs] skipped: N8N_CS_WEBHOOK_URL kosong");
+    return { skipped: "n8n_url_empty" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  const headers = { "Content-Type": "application/json" };
+  if (N8N_CS_WEBHOOK_TOKEN) headers["X-Webhook-Token"] = N8N_CS_WEBHOOK_TOKEN;
+
+  try {
+    const r = await fetch(N8N_CS_WEBHOOK_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(originalBody || {}),
+      signal: controller.signal,
+    });
+    const text = await r.text().catch(() => "");
+    console.log(`[n8n-cs] triggered status=${r.status}`);
+    return {
+      ok: r.ok,
+      status: r.status,
+      statusText: r.statusText,
+      body: text ? text.slice(0, 500) : undefined,
+    };
+  } catch (e) {
+    const message = e.name === "AbortError" ? "timeout" : e.message;
+    console.error("[n8n-cs] error", message);
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ---------- Migrasi idempoten (aman dijalankan berulang) ----------
@@ -232,16 +270,24 @@ app.post("/webhook/wa-masuk", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
       [kontak.id, jid, fromMe ? "keluar" : "masuk", teks, tipe, waId]);
 
+    if (fromMe) {
+      return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n_skipped: "from_me" });
+    }
+
     if (!fromMe && kontak.ai_aktif === false) {
-      return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, ai_skipped: "manual" });
+      console.log("[n8n-cs] skipped: manual");
+      return res.json({
+        ok: true,
+        kontak_id: kontak.id,
+        fbc: !!kontak.fbc,
+        ai_skipped: "manual",
+        n8n_skipped: "manual",
+      });
     }
 
-    if (!fromMe) {
-      // Fase 2.2/2.3: hanya jalankan AI jika kontak.ai_aktif !== false
-      // TODO: panggil proses AI otomatis di sini.
-    }
+    const n8n = await triggerN8nCsWorkflow(req.body);
 
-    res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc });
+    res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n });
   } catch (e) {
     console.error("[webhook]", e.message);
     res.status(500).json({ ok: false, error: e.message });
