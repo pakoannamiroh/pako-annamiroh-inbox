@@ -42,6 +42,7 @@ app.use(express.json({ limit: "2mb" }));
 app.use((req, res, next) => {
   if (!UI_USER) return next();                       // auth dimatikan
   if (req.path.startsWith("/webhook")) return next(); // webhook pakai token sendiri
+  if (req.path.startsWith("/api/internal")) return next(); // internal endpoint pakai token sendiri
   const h = req.headers.authorization || "";
   const [u, p] = Buffer.from(h.split(" ")[1] || "", "base64").toString().split(":");
   if (u === UI_USER && p === UI_PASS) return next();
@@ -156,7 +157,7 @@ async function migrate() {
       fbc TEXT, fbp TEXT,
       utm_source TEXT, utm_campaign TEXT,
       kode TEXT,
-      ai_aktif BOOLEAN DEFAULT true,
+      ai_aktif BOOLEAN DEFAULT false,
       lead_signals JSONB DEFAULT '[]'::jsonb,
       ai_summary TEXT,
       lead_classified_at TIMESTAMPTZ,
@@ -194,7 +195,7 @@ async function migrate() {
   const cols = {
     kontak: ["jid TEXT","no_hp TEXT","nama TEXT","status_lead TEXT","skor_lead INTEGER",
       "sumber_iklan TEXT","fbc TEXT","fbp TEXT","utm_source TEXT","utm_campaign TEXT",
-      "kode TEXT","ai_aktif BOOLEAN DEFAULT true",
+      "kode TEXT","ai_aktif BOOLEAN DEFAULT false",
       "lead_signals JSONB DEFAULT '[]'::jsonb","ai_summary TEXT","lead_classified_at TIMESTAMPTZ",
       "dibuat TIMESTAMPTZ DEFAULT now()","diperbarui TIMESTAMPTZ DEFAULT now()"],
     percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
@@ -206,6 +207,7 @@ async function migrate() {
   for (const [tbl, defs] of Object.entries(cols))
     for (const d of defs)
       await pool.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${d}`);
+  await pool.query(`ALTER TABLE kontak ALTER COLUMN ai_aktif SET DEFAULT false`);
   console.log("[migrate] tabel kontak & percakapan siap");
 }
 
