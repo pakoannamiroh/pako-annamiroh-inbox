@@ -7,6 +7,7 @@ const express = require("express");
 const path = require("path");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const { getLeadClassificationAuthStatus, validateLeadClassificationPayload } = require("./lead-classification-utils");
 
 const {
   PORT = 3100,
@@ -26,6 +27,7 @@ const {
   CAPI_TEST_CODE = "",          // Test event code (isi saat uji, kosongkan di produksi)
   N8N_CS_WEBHOOK_URL = "",      // Webhook production n8n workflow CS
   N8N_CS_WEBHOOK_TOKEN = "",    // opsional: token tambahan untuk webhook n8n
+  N8N_INTERNAL_TOKEN = "",      // token internal untuk lead-classification n8n
 } = process.env;
 
 const pool = new Pool({
@@ -155,6 +157,9 @@ async function migrate() {
       utm_source TEXT, utm_campaign TEXT,
       kode TEXT,
       ai_aktif BOOLEAN DEFAULT true,
+      lead_signals JSONB DEFAULT '[]'::jsonb,
+      ai_summary TEXT,
+      lead_classified_at TIMESTAMPTZ,
       dibuat TIMESTAMPTZ DEFAULT now(),
       diperbarui TIMESTAMPTZ DEFAULT now()
     );
@@ -190,6 +195,7 @@ async function migrate() {
     kontak: ["jid TEXT","no_hp TEXT","nama TEXT","status_lead TEXT","skor_lead INTEGER",
       "sumber_iklan TEXT","fbc TEXT","fbp TEXT","utm_source TEXT","utm_campaign TEXT",
       "kode TEXT","ai_aktif BOOLEAN DEFAULT true",
+      "lead_signals JSONB DEFAULT '[]'::jsonb","ai_summary TEXT","lead_classified_at TIMESTAMPTZ",
       "dibuat TIMESTAMPTZ DEFAULT now()","diperbarui TIMESTAMPTZ DEFAULT now()"],
     percakapan: ["kontak_id INTEGER","jid TEXT","arah TEXT","pesan TEXT",
       "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
@@ -303,6 +309,54 @@ app.post("/webhook/wa-masuk", async (req, res) => {
 });
 
 // ---------- API untuk UI ----------
+app.post("/api/internal/lead-classification", async (req, res) => {
+  try {
+    const headerToken = req.get("x-internal-token") || "";
+    const authStatus = getLeadClassificationAuthStatus(headerToken, N8N_INTERNAL_TOKEN);
+    if (authStatus === "missing-token") return res.status(401).json({ ok: false, error: "unauthorized" });
+    if (authStatus === "forbidden") return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const validation = validateLeadClassificationPayload(req.body || {});
+    if (!validation.valid) {
+      return res.status(400).json({ ok: false, error: "invalid_payload", details: validation.errors });
+    }
+
+    const { normalized } = validation;
+    let kontak = null;
+
+    if (normalized.jid) {
+      const { rows } = await pool.query("SELECT id FROM kontak WHERE jid=$1 LIMIT 1", [normalized.jid]);
+      kontak = rows[0] || null;
+    }
+
+    if (!kontak && normalized.no_hp) {
+      const { rows } = await pool.query("SELECT id FROM kontak WHERE no_hp=$1 LIMIT 1", [normalized.no_hp]);
+      kontak = rows[0] || null;
+    }
+
+    if (!kontak) return res.status(404).json({ ok: false, error: "kontak_not_found" });
+
+    const leadSignals = Array.isArray(normalized.lead_signals) ? normalized.lead_signals : [];
+    const { rows } = await pool.query(
+      `UPDATE kontak
+       SET status_lead=$1,
+           skor_lead=$2,
+           lead_signals=$3,
+           ai_summary=$4,
+           lead_classified_at=now(),
+           diperbarui=now()
+       WHERE id=$5
+       RETURNING id, status_lead, skor_lead, lead_signals, ai_summary, lead_classified_at`,
+      [normalized.status_lead, normalized.lead_score, JSON.stringify(leadSignals), normalized.ai_summary, kontak.id]
+    );
+
+    if (!rows.length) return res.status(404).json({ ok: false, error: "kontak_not_found" });
+    res.json({ ok: true, kontak_id: rows[0].id, status_lead: rows[0].status_lead, skor_lead: rows[0].skor_lead });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/chats", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -317,6 +371,9 @@ app.get("/api/chats", async (_req, res) => {
     res.json(rows.map(r => ({
       id: r.id, nama: r.nama, no_hp: r.no_hp, status_lead: r.status_lead,
       skor_lead: r.skor_lead, ai_aktif: r.ai_aktif !== false,
+      lead_signals: Array.isArray(r.lead_signals) ? r.lead_signals : [],
+      ai_summary: r.ai_summary || null,
+      lead_classified_at: r.lead_classified_at || null,
       sumber_iklan: r.sumber_iklan, fbc: r.fbc, fbp: r.fbp, kode: r.kode,
       last: r.last, last_time: fmtClock(r.last_waktu),
       first: fmtTime(r.dibuat),
@@ -451,6 +508,7 @@ app.get("/api/debug/env", (_req, res) => {
     ok: true,
     hasN8nCsWebhookUrl: !!N8N_CS_WEBHOOK_URL,
     hasN8nCsWebhookToken: !!N8N_CS_WEBHOOK_TOKEN,
+    hasN8nInternalToken: !!N8N_INTERNAL_TOKEN,
     hasCapiToken: !!CAPI_TOKEN,
     hasCapiDatasetId: !!CAPI_DATASET_ID,
     hasEvolutionUrl: !!EVOLUTION_URL,

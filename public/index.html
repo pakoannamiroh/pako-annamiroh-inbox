@@ -178,6 +178,7 @@
             </div>
           </div>
           <ul class="signals" id="signals" style="margin-top:12px"></ul>
+          <div id="lead-summary" class="muted" style="margin-top:10px"></div>
         </div>
 
         <div class="card">
@@ -343,18 +344,27 @@ async function openChat(id){
   applyAIToggleUI(c);
   // Lead score
   const num=$("#score-num"),ring=$("#score-ring"),lvl=$("#score-lvl");
-  if(typeof c.skor_lead==="number"){
+  const hasClassification=typeof c.skor_lead==="number" && ["cold","warm","hot"].includes(c.status_lead);
+  if(hasClassification){
     num.textContent=c.skor_lead;
     ring.style.background=`conic-gradient(${col} 0 ${c.skor_lead}%, var(--soft-2) ${c.skor_lead}% 100%)`;
     lvl.textContent=leadLabel(c.status_lead);lvl.style.color=col;
-    $("#score-desc").textContent=state.demo?"Contoh skor (analisis AI aktif di Fase 2).":"Analisis AI aktif di Fase 2.";
+    $("#score-desc").textContent=state.demo?"Contoh skor dari data produksi." : "Skor dan label berasal dari klasifikasi otomatis.";
   }else{
     num.textContent="–";ring.style.background="conic-gradient(var(--soft-2) 0 100%)";
     lvl.textContent="Belum dinilai";lvl.style.color="var(--text-2)";
-    $("#score-desc").textContent="Penilaian otomatis oleh AI aktif di Fase 2.";
+    $("#score-desc").textContent="Belum ada klasifikasi lead otomatis untuk kontak ini.";
   }
   const sig=$("#signals");sig.innerHTML="";
-  (c.signals||[]).forEach(s=>{const li=document.createElement("li");li.innerHTML=`<span class="ic">✓</span> ${esc(s)}`;sig.appendChild(li)});
+  const leadSignals=Array.isArray(c.lead_signals)?c.lead_signals:[];
+  if(leadSignals.length){
+    leadSignals.forEach(s=>{const li=document.createElement("li");li.innerHTML=`<span class="ic">✓</span> ${esc(s)}`;sig.appendChild(li)});
+  }else{
+    const li=document.createElement("li");li.innerHTML=`<span class="ic">•</span> <span class="muted">Belum ada sinyal klasifikasi.</span>`;sig.appendChild(li);
+  }
+  const summaryEl=$("#lead-summary");
+  if(c.ai_summary){summaryEl.textContent=c.ai_summary;summaryEl.classList.remove("hide");}
+  else{summaryEl.textContent="";summaryEl.classList.add("hide");}
   // Info lead
   $("#i-name").textContent=c.nama||"—";
   $("#i-hp").textContent="+"+(c.no_hp||"—");
