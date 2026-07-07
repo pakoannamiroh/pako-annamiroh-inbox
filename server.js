@@ -276,18 +276,24 @@ app.post("/webhook/wa-masuk", async (req, res) => {
       return res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n_skipped: "from_me" });
     }
 
-    if (!fromMe && kontak.ai_aktif === false) {
-      console.log("[n8n-cs] skipped: manual");
+    if (kontak.ai_aktif === false) {
+      console.log("[n8n-cs] skipped: ai_off");
       return res.json({
         ok: true,
         kontak_id: kontak.id,
         fbc: !!kontak.fbc,
-        ai_skipped: "manual",
-        n8n_skipped: "manual",
+        ai_skipped: "ai_off",
+        n8n_skipped: "ai_off",
       });
     }
 
-    const n8n = await triggerN8nCsWorkflow(req.body);
+    let n8n;
+    try {
+      n8n = await triggerN8nCsWorkflow(req.body);
+    } catch (e) {
+      console.error("[n8n-cs] error", e.message);
+      n8n = { ok: false, error: e.message };
+    }
 
     res.json({ ok: true, kontak_id: kontak.id, fbc: !!kontak.fbc, n8n });
   } catch (e) {
@@ -439,6 +445,20 @@ app.patch("/api/chats/:id/ai", async (req, res) => {
 });
 
 app.get("/health", (_r, res) => res.json({ ok: true }));
+
+app.get("/api/debug/env", (_req, res) => {
+  res.json({
+    ok: true,
+    hasN8nCsWebhookUrl: !!N8N_CS_WEBHOOK_URL,
+    hasN8nCsWebhookToken: !!N8N_CS_WEBHOOK_TOKEN,
+    hasCapiToken: !!CAPI_TOKEN,
+    hasCapiDatasetId: !!CAPI_DATASET_ID,
+    hasEvolutionUrl: !!EVOLUTION_URL,
+    hasEvolutionApiKey: !!EVOLUTION_APIKEY,
+    hasEvolutionInstance: !!EVOLUTION_INSTANCE,
+  });
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 migrate()
