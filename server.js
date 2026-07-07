@@ -7,7 +7,7 @@ const express = require("express");
 const path = require("path");
 const { Pool } = require("pg");
 const crypto = require("crypto");
-const { getLeadClassificationAuthStatus, validateLeadClassificationPayload } = require("./lead-classification-utils");
+const { getLeadClassificationAuthStatus, validateLeadClassificationPayload, validateAutoSignalPayload, buildAutoSignalDedupeKey } = require("./lead-classification-utils");
 
 const {
   PORT = 3100,
@@ -185,6 +185,8 @@ async function migrate() {
       event_id TEXT,
       status TEXT,
       pesan_error TEXT,
+      source TEXT DEFAULT 'manual',
+      dedupe_key TEXT,
       waktu TIMESTAMPTZ DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_percakapan_kontak ON percakapan(kontak_id);
@@ -202,12 +204,15 @@ async function migrate() {
       "tipe TEXT","wa_message_id TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
     log_event: ["kontak_id INTEGER","jenis TEXT","kualitas TEXT","nilai_order NUMERIC",
       "status_bayar TEXT","catatan TEXT",
-      "event_id TEXT","status TEXT","pesan_error TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
+      "event_id TEXT","status TEXT","pesan_error TEXT","source TEXT DEFAULT 'manual'","dedupe_key TEXT","waktu TIMESTAMPTZ DEFAULT now()"],
   };
   for (const [tbl, defs] of Object.entries(cols))
     for (const d of defs)
       await pool.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${d}`);
   await pool.query(`ALTER TABLE kontak ALTER COLUMN ai_aktif SET DEFAULT false`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_auto_lead_quality
+    ON log_event (kontak_id, jenis, kualitas, source)
+    WHERE jenis = 'Lead' AND source = 'auto' AND status = 'terkirim'`);
   console.log("[migrate] tabel kontak & percakapan siap");
 }
 
@@ -419,6 +424,84 @@ app.post("/api/chats/:id/send", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post("/api/internal/auto-signal", async (req, res) => {
+  try {
+    const headerToken = req.get("x-internal-token") || "";
+    const authStatus = getLeadClassificationAuthStatus(headerToken, N8N_INTERNAL_TOKEN);
+    if (authStatus === "missing-token") return res.status(401).json({ ok: false, error: "unauthorized" });
+    if (authStatus === "forbidden") return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const validation = validateAutoSignalPayload(req.body || {});
+    if (!validation.valid) {
+      return res.status(400).json({ ok: false, error: "invalid_payload", details: validation.errors });
+    }
+
+    const { normalized } = validation;
+    const dedupeKey = buildAutoSignalDedupeKey(normalized.kontak_id, normalized.kualitas);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [Number(normalized.kontak_id)]);
+      const { rows: existingRows } = await client.query(
+        `SELECT id FROM log_event WHERE kontak_id=$1 AND jenis='Lead' AND kualitas=$2 AND source='auto' AND status='terkirim' LIMIT 1`,
+        [normalized.kontak_id, normalized.kualitas]
+      );
+      if (existingRows.length) {
+        await client.query("COMMIT");
+        return res.json({ ok: true, action: "skipped_duplicate", kontak_id: normalized.kontak_id, kualitas: normalized.kualitas });
+      }
+
+      const { rows: kontakRows } = await client.query("SELECT * FROM kontak WHERE id=$1", [normalized.kontak_id]);
+      if (!kontakRows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "kontak_not_found" });
+      }
+
+      const kontak = kontakRows[0];
+      const eventId = `auto-lead-${normalized.kontak_id}-${normalized.kualitas}`;
+      let capiResult = null;
+      let capiError = null;
+      try {
+        capiResult = await sendCapiEvent({
+          eventName: "Lead",
+          eventId,
+          no_hp: kontak.no_hp,
+          nama: kontak.nama,
+          fbc: kontak.fbc,
+          fbp: kontak.fbp,
+          customData: { lead_quality: normalized.kualitas, source: normalized.source },
+        });
+      } catch (e) {
+        capiError = e.message;
+      }
+
+      await client.query(
+        `INSERT INTO log_event (kontak_id, jenis, kualitas, event_id, status, pesan_error, source, dedupe_key)
+         VALUES ($1,'Lead',$2,$3,$4,$5,$6,$7)`,
+        [normalized.kontak_id, normalized.kualitas, eventId, capiError ? "gagal" : "terkirim", capiError || null, "auto", dedupeKey]
+      );
+      if (capiError) {
+        await client.query("COMMIT");
+        return res.status(502).json({ ok: false, error: "capi_failed", detail: capiError });
+      }
+      await client.query(
+        `UPDATE kontak SET status_lead=$1, diperbarui=now() WHERE id=$2`,
+        [normalized.kualitas, normalized.kontak_id]
+      );
+      await client.query("COMMIT");
+      res.json({ ok: true, action: "sent", kontak_id: normalized.kontak_id, kualitas: normalized.kualitas, event_id: eventId, events_received: capiResult?.events_received });
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Fase 1: Kirim sinyal Lead Warm/Hot ke Meta CAPI ---
 app.post("/api/signal", async (req, res) => {
   try {
@@ -435,8 +518,8 @@ app.post("/api/signal", async (req, res) => {
     } catch (e) { capiError = e.message; }
     await pool.query("UPDATE kontak SET status_lead=$1, diperbarui=now() WHERE id=$2", [kualitas, kontak_id]);
     await pool.query(
-      "INSERT INTO log_event (kontak_id, jenis, kualitas, event_id, status, pesan_error) VALUES ($1,'Lead',$2,$3,$4,$5)",
-      [kontak_id, kualitas, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+      "INSERT INTO log_event (kontak_id, jenis, kualitas, event_id, status, pesan_error, source, dedupe_key) VALUES ($1,'Lead',$2,$3,$4,$5,'manual',$6)",
+      [kontak_id, kualitas, eventId, capiError ? "gagal" : "terkirim", capiError || null, `manual-lead-${kontak_id}-${kualitas}`]
     );
     if (capiError) return res.json({ ok: false, error: capiError });
     res.json({ ok: true, events_received: capiResult?.events_received });
@@ -459,8 +542,8 @@ app.post("/api/purchase", async (req, res) => {
       capiResult = await sendCapiEvent({ eventName: "Purchase", eventId, no_hp: k.no_hp, nama: k.nama, fbc: k.fbc, fbp: k.fbp, customData });
     } catch (e) { capiError = e.message; }
     await pool.query(
-      "INSERT INTO log_event (kontak_id, jenis, nilai_order, status_bayar, catatan, event_id, status, pesan_error) VALUES ($1,'Purchase',$2,$3,$4,$5,$6,$7)",
-      [kontak_id, nilai_order || null, status || null, catatan || null, eventId, capiError ? "gagal" : "terkirim", capiError || null]
+      "INSERT INTO log_event (kontak_id, jenis, nilai_order, status_bayar, catatan, event_id, status, pesan_error, source, dedupe_key) VALUES ($1,'Purchase',$2,$3,$4,$5,$6,$7,'manual',$8)",
+      [kontak_id, nilai_order || null, status || null, catatan || null, eventId, capiError ? "gagal" : "terkirim", capiError || null, `manual-purchase-${kontak_id}`]
     );
     if (capiError) return res.json({ ok: false, error: capiError });
     res.json({ ok: true, events_received: capiResult?.events_received });
@@ -477,7 +560,8 @@ app.get("/api/signals/:kontakId", async (req, res) => {
     res.json(rows.map(r => ({
       id: r.id, jenis: r.jenis, kualitas: r.kualitas,
       nilai_order: r.nilai_order, status: r.status,
-      pesan_error: r.pesan_error, waktu: fmtTime(r.waktu),
+      pesan_error: r.pesan_error, source: r.source || "manual",
+      dedupe_key: r.dedupe_key || null, waktu: fmtTime(r.waktu),
     })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

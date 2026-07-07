@@ -40,7 +40,25 @@ function validateLeadClassificationPayload(payload) {
   return { valid: errors.length === 0, normalized, errors };
 }
 
+function validateAutoSignalPayload(payload) {
+  const data = payload || {};
+  const kualitas = typeof data.kualitas === 'string' ? data.kualitas.toLowerCase() : '';
+  const errors = [];
+  if (!['warm', 'hot'].includes(kualitas)) errors.push('kualitas must be warm or hot');
+  const kontakId = Number(data.kontak_id);
+  if (!Number.isInteger(kontakId) || kontakId <= 0) errors.push('kontak_id must be a positive integer');
+  const source = typeof data.source === 'string' && data.source.trim() ? data.source.trim() : 'n8n-cs-baru-auto';
+  const dedupeKey = `auto-lead-${kontakId}-${kualitas}`;
+  return { valid: errors.length === 0, normalized: { kontak_id: kontakId, kualitas, source, dedupe_key: dedupeKey }, errors };
+}
+
+function buildAutoSignalDedupeKey(kontakId, kualitas) {
+  return `auto-lead-${Number(kontakId)}-${String(kualitas || '').toLowerCase()}`;
+}
+
 module.exports = {
   getLeadClassificationAuthStatus,
   validateLeadClassificationPayload,
+  validateAutoSignalPayload,
+  buildAutoSignalDedupeKey,
 };
